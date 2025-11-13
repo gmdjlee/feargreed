@@ -24,7 +24,7 @@ OPTION_HEADERS = {
     "sec-fetch-site": "same-origin",
 }
 
-# 옵션 데이터용 페이로드 템플릿 (날짜는 사용 시 추가)
+# 옵션 데이터용 페이로드 템플릿 (날짜와 isuOpt는 사용 시 추가)
 OPTION_PAYLOAD_TEMPLATE = {
     "inqTpCd": "2",
     "prtType": "QTY",
@@ -32,7 +32,6 @@ OPTION_PAYLOAD_TEMPLATE = {
     "isuCd02": "KR___OPK2I",
     "isuCd": "KR___OPK2I",
     "aggBasTpCd": "",
-    "isuOpt": "C",  # C: Call 옵션, P: Put 옵션
     "prodId": "KR___OPK2I",
     "bld": "dbms/MDC/STAT/standard/MDCSTAT13102",
 }
@@ -89,24 +88,13 @@ def format_date(date_str):
         return date_str
 
 
-def fetch_data(session, url, headers, payload, error_prefix=""):
+def fetch_data(session, url, headers, payload):
     """공통 데이터 조회 함수"""
     try:
         response = session.post(url, headers=headers, data=payload, timeout=10)
         response.raise_for_status()
-
-        if not response.text:
-            print(f"{error_prefix}경고: 서버로부터 빈 응답을 받았습니다.")
-            return None
-
-        return response.json()
-    except json.JSONDecodeError as e:
-        print(f"{error_prefix}JSON 파싱 오류: {e}")
-        if "text/html" in response.headers.get("Content-Type", ""):
-            print(f"{error_prefix}HTML 응답 수신. API 요청 파라미터를 확인해주세요.")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"{error_prefix}요청 중 오류 발생: {e}")
+        return response.json() if response.text else None
+    except (json.JSONDecodeError, requests.exceptions.RequestException):
         return None
 
 
@@ -144,7 +132,7 @@ class KOSPI200OptionVolume:
 
         Returns:
         --------
-        dict : Call과 Put 거래량 데이터를 포함하는 딕셔너리
+        dict : 옵션 거래량 데이터
         """
         if option_type not in ["C", "P"]:
             raise ValueError(f"Invalid option_type: {option_type}. Must be 'C' or 'P'.")
@@ -153,25 +141,19 @@ class KOSPI200OptionVolume:
         payload.update({
             "strtDd": start_date,
             "endDd": end_date,
-            "isuOpt": option_type,
+            "isuOpt": option_type,  # C: Call, P: Put
         })
 
-        return fetch_data(self.session, self.base_url, self.headers, payload, "[옵션] ")
+        return fetch_data(self.session, self.base_url, self.headers, payload)
 
     def parse_and_display(self, data):
         """데이터 파싱 및 출력"""
         if not data:
-            print("데이터가 없습니다.")
             return None
 
         df = pd.DataFrame(data.get("block1") or data.get("output", []))
         if df.empty:
-            print("조회된 데이터가 없습니다.")
             return None
-
-        print("\n" + "=" * 80)
-        print("코스피200 옵션 거래량 조회 결과")
-        print("=" * 80)
 
         # 날짜 형식 변환
         if "TRD_DD" in df.columns:
@@ -195,17 +177,6 @@ class KOSPI200OptionVolume:
                 "A12": "외국인합계",
                 "AMT_OR_QTY": "전체",
             }, inplace=True)
-
-        print(df.to_string(index=False))
-        print("\n" + "=" * 80)
-
-        # 통계 요약
-        if "CALL_VAL" in df.columns and "PUT_VAL" in df.columns:
-            total_call, total_put = df["CALL_VAL"].sum(), df["PUT_VAL"].sum()
-            print(f"\n[통계 요약]")
-            print(f"총 Call 거래량: {total_call:,.0f}")
-            print(f"총 Put 거래량: {total_put:,.0f}")
-            print(f"Call/Put 비율: {total_call / total_put:.2f}")
 
         return df
 
@@ -263,22 +234,16 @@ class BondIndexData:
             "codeNmidxCd_finder_drvetcidx0_1": index_info["name"],
         })
 
-        return fetch_data(self.session, self.base_url, self.headers, payload, "[채권] ")
+        return fetch_data(self.session, self.base_url, self.headers, payload)
 
     def parse_and_display(self, data):
-        """데이터 파싱 및 출력"""
+        """데이터 파싱"""
         if not data:
-            print("데이터가 없습니다.")
             return None
 
         df = pd.DataFrame(data.get("block1") or data.get("output", []))
         if df.empty:
-            print("조회된 데이터가 없습니다.")
             return None
-
-        print("\n" + "=" * 80)
-        print("채권 지수 데이터 조회 결과")
-        print("=" * 80)
 
         # 날짜 형식 변환
         if "TRD_DD" in df.columns:
@@ -286,77 +251,36 @@ class BondIndexData:
                 lambda x: x.replace("/", "-") if "/" in str(x) else format_date(str(x))
             )
 
-        print(df.to_string(index=False))
-        print("\n" + "=" * 80)
-
         return df
 
 
 def main():
     """메인 함수 - 옵션 데이터와 채권 지수 데이터 조회 예시"""
-    print("=" * 80)
-    print("KRX 파생상품 데이터 조회 프로그램")
-    print("=" * 80)
-
     start_date, end_date = "20251103", "20251108"
-    date_range = f"{format_date(start_date)} ~ {format_date(end_date)}"
 
     # 옵션 거래량 조회
     option_volume = KOSPI200OptionVolume()
-
-    print("\n[ 1-1. 코스피200 Call 옵션 거래량 조회 ]")
-    print(f"조회 기간: {date_range}\n")
     call_result = option_volume.get_option_volume(start_date, end_date, option_type="C")
     call_df = option_volume.parse_and_display(call_result)
     if isinstance(call_df, pd.DataFrame) and not call_df.empty:
-        filename = f"kospi200_call_option_{start_date}_{end_date}.csv"
-        call_df.to_csv(filename, index=False, encoding="utf-8-sig")
-        print(f"→ '{filename}' 저장 완료")
+        call_df.to_csv(f"kospi200_call_option_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
 
-    print("\n[ 1-2. 코스피200 Put 옵션 거래량 조회 ]")
-    print(f"조회 기간: {date_range}\n")
     put_result = option_volume.get_option_volume(start_date, end_date, option_type="P")
     put_df = option_volume.parse_and_display(put_result)
     if isinstance(put_df, pd.DataFrame) and not put_df.empty:
-        filename = f"kospi200_put_option_{start_date}_{end_date}.csv"
-        put_df.to_csv(filename, index=False, encoding="utf-8-sig")
-        print(f"→ '{filename}' 저장 완료")
+        put_df.to_csv(f"kospi200_put_option_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
 
     # 채권 지수 조회
     bond_index = BondIndexData()
-
-    print("\n[ 2-1. 5년 국채선물 추종 지수 조회 ]")
-    print(f"조회 기간: {date_range}\n")
     bond_5y_result = bond_index.get_bond_index(start_date, end_date, index_type="5년 국채선물 추종 지수")
     bond_5y_df = bond_index.parse_and_display(bond_5y_result)
     if isinstance(bond_5y_df, pd.DataFrame) and not bond_5y_df.empty:
-        filename = f"bond_5year_index_{start_date}_{end_date}.csv"
-        bond_5y_df.to_csv(filename, index=False, encoding="utf-8-sig")
-        print(f"→ '{filename}' 저장 완료")
+        bond_5y_df.to_csv(f"bond_5year_index_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
 
-    print("\n[ 2-2. 10년 국채선물 지수 조회 ]")
-    print(f"조회 기간: {date_range}\n")
     bond_10y_result = bond_index.get_bond_index(start_date, end_date, index_type="10년국채선물지수")
     bond_10y_df = bond_index.parse_and_display(bond_10y_result)
     if isinstance(bond_10y_df, pd.DataFrame) and not bond_10y_df.empty:
-        filename = f"bond_10year_index_{start_date}_{end_date}.csv"
-        bond_10y_df.to_csv(filename, index=False, encoding="utf-8-sig")
-        print(f"→ '{filename}' 저장 완료")
-
-    # 요약
-    print("\n" + "=" * 80)
-    print("[ 조회 완료 요약 ]")
-    print("=" * 80)
-    results = [
-        ("Call 옵션", call_df),
-        ("Put 옵션", put_df),
-        ("5년 국채 지수", bond_5y_df),
-        ("10년 국채 지수", bond_10y_df),
-    ]
-    for name, df in results:
-        status = "✓ 성공" if isinstance(df, pd.DataFrame) and not df.empty else "✗ 실패"
-        print(f"{status}: {name}")
-    print("=" * 80)
+        bond_10y_df.to_csv(f"bond_10year_index_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
 
 
 if __name__ == "__main__":

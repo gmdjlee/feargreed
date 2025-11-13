@@ -75,6 +75,13 @@ BOND_INDEX_MAPPING = {
         "idxCd": "1",
         "idxCd2": "309",
     },
+    "코스피 200 변동성지수": {
+        "name": "코스피 200 변동성지수",
+        "indTpCd": "1",
+        "idxIndCd": "300",
+        "idxCd": "1",
+        "idxCd2": "300",
+    },
 }
 
 
@@ -212,6 +219,7 @@ class BondIndexData:
             채권 지수 타입 (기본값: "5년 국채선물 추종 지수")
             - "5년 국채선물 추종 지수"
             - "10년국채선물지수"
+            - "코스피 200 변동성지수"
 
         Returns:
         --------
@@ -281,6 +289,12 @@ def main():
     bond_10y_df = bond_index.parse_and_display(bond_10y_result)
     if isinstance(bond_10y_df, pd.DataFrame) and not bond_10y_df.empty:
         bond_10y_df.to_csv(f"bond_10year_index_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
+
+    # 코스피 200 변동성지수 조회
+    vkospi_result = bond_index.get_bond_index(start_date, end_date, index_type="코스피 200 변동성지수")
+    vkospi_df = bond_index.parse_and_display(vkospi_result)
+    if isinstance(vkospi_df, pd.DataFrame) and not vkospi_df.empty:
+        vkospi_df.to_csv(f"vkospi200_index_{start_date}_{end_date}.csv", index=False, encoding="utf-8-sig")
 
 
 if __name__ == "__main__":

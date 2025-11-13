@@ -1,6 +1,7 @@
 import json
 import sys
 from datetime import datetime
+from functools import reduce
 
 import pandas as pd
 import requests
@@ -219,23 +220,65 @@ class IndexData(BaseFetcher):
         return df[[c for c in cols if c in df.columns]]
 
 
+def combine_data(start_date, end_date):
+    """모든 데이터를 조합하여 JSON 생성"""
+    # 옵션 데이터 수집
+    option = OptionData()
+    call_df = option.parse(option.get(start_date, end_date, "C"))
+    put_df = option.parse(option.get(start_date, end_date, "P"))
+
+    # 지수 데이터 수집
+    index = IndexData()
+    bond5y_df = index.parse(index.get(start_date, end_date, "5년국채"))
+    bond10y_df = index.parse(index.get(start_date, end_date, "10년국채"))
+    vkospi_df = index.parse(index.get(start_date, end_date, "VKOSPI"))
+
+    # 데이터 존재 확인
+    if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df]):
+        return None
+
+    # Call/Put 옵션 5일 이동평균 계산
+    call_df["Call Option"] = call_df["전체"].rolling(window=5, min_periods=1).mean()
+    put_df["Put Option"] = put_df["전체"].rolling(window=5, min_periods=1).mean()
+
+    # 거래일 기준으로 병합
+    dfs = [
+        bond5y_df[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
+        bond10y_df[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
+        vkospi_df[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
+        call_df[["거래일", "Call Option"]],
+        put_df[["거래일", "Put Option"]],
+    ]
+    result = reduce(lambda left, right: left.merge(right, on="거래일", how="outer"), dfs)
+
+    # 거래일 기준 정렬
+    return result.sort_values("거래일").reset_index(drop=True)
+
+
 def main():
     """메인 함수"""
     start, end = "20251103", "20251108"
 
-    # 옵션 데이터
+    # 개별 CSV 파일 저장
     option = OptionData()
     for opt_type, name in [("C", "call"), ("P", "put")]:
         df = option.parse(option.get(start, end, opt_type))
         if df is not None and not df.empty:
             df.to_csv(f"kospi200_{name}_option_{start}_{end}.csv", index=False, encoding="utf-8-sig")
 
-    # 지수 데이터
     index = IndexData()
     for key, filename in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200")]:
         df = index.parse(index.get(start, end, key))
         if df is not None and not df.empty:
             df.to_csv(f"{filename}_index_{start}_{end}.csv", index=False, encoding="utf-8-sig")
+
+    # 조합 데이터 생성 및 JSON 저장
+    combined = combine_data(start, end)
+    if combined is not None and not combined.empty:
+        # JSON 파일 저장
+        combined.to_json(f"combined_data_{start}_{end}.json", orient="records", force_ascii=False, indent=2)
+        # CSV 파일 저장 (탭 구분)
+        combined.to_csv(f"combined_data_{start}_{end}.csv", index=False, encoding="utf-8-sig", sep="\t")
 
 
 if __name__ == "__main__":

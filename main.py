@@ -162,28 +162,29 @@ class KOSPI200OptionVolume:
         if df.empty:
             return None
 
+        # 컬럼명 매핑
+        column_mapping = {
+            "TRD_DD": "거래일",
+            "A07": "기관합계",
+            "A08": "기타법인",
+            "A09": "개인",
+            "A12": "외국인합계",
+            "AMT_OR_QTY": "전체",
+        }
+        df = df.rename(columns=column_mapping)
+
         # 날짜 형식 변환
-        if "TRD_DD" in df.columns:
-            df["거래일"] = df["TRD_DD"].apply(
+        if "거래일" in df.columns:
+            df["거래일"] = df["거래일"].apply(
                 lambda x: x.replace("/", "-") if "/" in str(x) else format_date(str(x))
             )
 
         # 숫자 데이터 정리
-        numeric_columns = ["A07", "A08", "A09", "A12", "AMT_OR_QTY"]
+        numeric_columns = ["기관합계", "기타법인", "개인", "외국인합계", "전체"]
         for col in [c for c in numeric_columns if c in df.columns]:
             df[col] = df[col].apply(
                 lambda x: int(str(x).replace(",", "")) if isinstance(x, str) else x
             )
-
-        # 컬럼명 매핑
-        if "A07" in df.columns:
-            df.rename(columns={
-                "A07": "기관합계",
-                "A08": "기타법인",
-                "A09": "개인",
-                "A12": "외국인합계",
-                "AMT_OR_QTY": "전체",
-            }, inplace=True)
 
         return df
 

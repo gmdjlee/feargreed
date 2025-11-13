@@ -253,11 +253,30 @@ class BondIndexData:
         if df.empty:
             return None
 
+        # 컬럼명 매핑
+        column_mapping = {
+            "TRD_DD": "거래일",
+            "CLSPRC_IDX": "종가",
+            "CMPPREVDD_IDX": "대비",
+            "FLUC_RT": "등락률",
+            "OPNPRC_IDX": "시가",
+            "HGPRC_IDX": "고가",
+            "LWPRC_IDX": "저가",
+        }
+
+        df = df.rename(columns=column_mapping)
+
         # 날짜 형식 변환
-        if "TRD_DD" in df.columns:
-            df["거래일"] = df["TRD_DD"].apply(
+        if "거래일" in df.columns:
+            df["거래일"] = df["거래일"].apply(
                 lambda x: x.replace("/", "-") if "/" in str(x) else format_date(str(x))
             )
+
+        # 컬럼 순서 정렬
+        desired_columns = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
+        existing_columns = [col for col in desired_columns if col in df.columns]
+        if existing_columns:
+            df = df[existing_columns]
 
         return df
 

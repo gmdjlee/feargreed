@@ -4,6 +4,8 @@ from datetime import datetime
 
 import pandas as pd
 import requests
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
 
 # 한글 출력 문제 해결
 if sys.platform == "win32":
@@ -402,6 +404,259 @@ class BondIndexData:
             return None
 
 
+# ========== Fear & Greed Index 계산 함수들 ==========
+
+
+def calculate_rsi(df, column, window=10):
+    """
+    RSI (Relative Strength Index) 계산 함수
+
+    Parameters:
+    -----------
+    df : DataFrame
+        데이터프레임
+    column : str
+        RSI를 계산할 컬럼명
+    window : int
+        RSI 계산 윈도우 (기본값: 10)
+
+    Returns:
+    --------
+    DataFrame : RSI_10 컬럼이 추가된 데이터프레임
+    """
+    delta = df[column].diff(1)
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    df.loc[:, 'RSI_10'] = rsi
+    return df
+
+
+def calculate_fear_greed(df, index_col, vix_col, call_vol_col, put_vol_col, bond_5y_col, bond_10y_col):
+    """
+    Fear & Greed Index 계산 함수
+
+    Parameters:
+    -----------
+    df : DataFrame
+        데이터프레임
+    index_col : str
+        시장 지수 컬럼명 (KOSPI 또는 KOSDAQ)
+    vix_col : str
+        변동성 지수 컬럼명
+    call_vol_col : str
+        Call 옵션 거래량 컬럼명
+    put_vol_col : str
+        Put 옵션 거래량 컬럼명
+    bond_5y_col : str
+        5년 국채 지수 컬럼명
+    bond_10y_col : str
+        10년 국채 지수 컬럼명
+
+    Returns:
+    --------
+    DataFrame : Fear_Greed_Index가 추가된 데이터프레임
+    """
+    # 125일 이동평균 계산
+    df.loc[:, '125_MA'] = df[index_col].rolling(window=125).mean()
+
+    # 모멘텀 계산
+    df.loc[:, 'Momentum'] = (df[index_col] - df['125_MA']) / df['125_MA'] * 100
+
+    # Put/Call 비율 계산
+    df.loc[:, 'Put_Call_Ratio'] = df[put_vol_col] / df[call_vol_col]
+
+    # 시장 변동성
+    df.loc[:, 'Market_Volatility'] = df[vix_col]
+
+    # 채권 수익률 차이
+    df.loc[:, 'Bond_Yield_Diff'] = df[bond_10y_col] - df[bond_5y_col]
+
+    # MinMax 스케일링
+    scaler = MinMaxScaler()
+    df[['Momentum', 'Put_Call_Ratio', 'Market_Volatility', 'Bond_Yield_Diff', 'RSI_10']] = scaler.fit_transform(
+        df[['Momentum', 'Put_Call_Ratio', 'Market_Volatility', 'Bond_Yield_Diff', 'RSI_10']]
+    )
+
+    # Fear & Greed Index 계산 (가중 평균)
+    df.loc[:, 'Fear_Greed_Index'] = (
+        df['Momentum'] * 0.2 +
+        (1 - df['Put_Call_Ratio']) * 0.2 +
+        (1 - df['Market_Volatility']) * 0.2 +
+        df['Bond_Yield_Diff'] * 0.2 +
+        df['RSI_10'] * 0.2
+    )
+
+    return df
+
+
+def calculate_macd(df, column, short_window=12, long_window=26, signal_window=9):
+    """
+    MACD 오실레이터 계산 함수
+
+    Parameters:
+    -----------
+    df : DataFrame
+        데이터프레임
+    column : str
+        MACD를 계산할 컬럼명
+    short_window : int
+        단기 EMA 윈도우 (기본값: 12)
+    long_window : int
+        장기 EMA 윈도우 (기본값: 26)
+    signal_window : int
+        시그널 라인 윈도우 (기본값: 9)
+
+    Returns:
+    --------
+    DataFrame : MACD, Signal_Line, Oscillator가 추가된 데이터프레임
+    """
+    df.loc[:, 'Short_EMA'] = df[column].ewm(span=short_window, adjust=False).mean()
+    df.loc[:, 'Long_EMA'] = df[column].ewm(span=long_window, adjust=False).mean()
+    df.loc[:, 'MACD'] = df['Short_EMA'] - df['Long_EMA']
+    df.loc[:, 'Signal_Line'] = df['MACD'].ewm(span=signal_window, adjust=False).mean()
+    df.loc[:, 'Oscillator'] = df['MACD'] - df['Signal_Line']
+    return df
+
+
+def plot_fear_greed_oscillator(df, date_col, index_col, market_name='KOSPI', months=6):
+    """
+    Fear & Greed 오실레이터와 시장 지수 그래프 생성
+
+    Parameters:
+    -----------
+    df : DataFrame
+        데이터프레임
+    date_col : str
+        날짜 컬럼명
+    index_col : str
+        시장 지수 컬럼명
+    market_name : str
+        시장 이름 (기본값: 'KOSPI')
+    months : int
+        표시할 최근 개월 수 (기본값: 6)
+    """
+    # 최근 N개월 데이터 필터링
+    recent_data = df[df[date_col] >= (df[date_col].max() - pd.DateOffset(months=months))]
+
+    # 그래프 생성
+    fig, ax1 = plt.subplots(figsize=(14, 7))
+
+    # Fear & Greed Oscillator (왼쪽 y축)
+    ax1.plot(recent_data[date_col], recent_data['Oscillator'],
+             label=f'Fear & Greed Oscillator ({market_name})', color='b')
+    ax1.set_xlabel('거래일')
+    ax1.set_ylabel(f'Fear & Greed Oscillator ({market_name})', color='b')
+    ax1.tick_params(axis='y', labelcolor='b')
+    ax1.grid(True)
+    ax1.legend(loc='upper left')
+
+    # 시장 지수 (오른쪽 y축)
+    ax2 = ax1.twinx()
+    ax2.plot(recent_data[date_col], recent_data[index_col],
+             label=f'{market_name} Index', color='g')
+    ax2.set_ylabel(f'{market_name} Index', color='g')
+    ax2.tick_params(axis='y', labelcolor='g')
+    ax2.legend(loc='upper right')
+
+    plt.title(f'Fear & Greed Oscillator and {market_name} Index Over Recent {months} Months')
+    plt.tight_layout()
+
+    # 파일로 저장
+    filename = f'{market_name.lower()}_fear_greed_oscillator.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    print(f"\n그래프가 '{filename}' 파일로 저장되었습니다.")
+    plt.close()
+
+
+def analyze_fear_greed_index(combine_data, market_type='KOSPI'):
+    """
+    Fear & Greed Index 분석 메인 함수
+
+    Parameters:
+    -----------
+    combine_data : DataFrame
+        다음 컬럼들을 포함해야 함:
+        - Date 또는 거래일: 날짜
+        - KOSPI 또는 KOSDAQ: 시장 지수
+        - Call Option: Call 옵션 거래량
+        - Put Option: Put 옵션 거래량
+        - 5년 국채선물 추종 지수: 5년 국채 지수
+        - 10년국채선물지수: 10년 국채 지수
+        - 코스피 200 변동성지수: 변동성 지수
+    market_type : str
+        'KOSPI' 또는 'KOSDAQ'
+
+    Returns:
+    --------
+    DataFrame : Fear & Greed Index가 계산된 데이터프레임
+    """
+    print(f"\n{'='*80}")
+    print(f"[ {market_type} Fear & Greed Index 분석 ]")
+    print(f"{'='*80}")
+
+    # 데이터 복사
+    df = combine_data.copy()
+
+    # 날짜 형식 변환
+    if 'Date' in df.columns:
+        df['거래일'] = pd.to_datetime(df['Date'])
+    elif '거래일' in df.columns:
+        df['거래일'] = pd.to_datetime(df['거래일'])
+    else:
+        print("오류: '거래일' 또는 'Date' 컬럼을 찾을 수 없습니다.")
+        return None
+
+    # 수치형 데이터 처리
+    numeric_cols = ['5년 국채선물 추종 지수', '10년국채선물지수', '코스피 200 변동성지수',
+                   market_type, 'Call Option', 'Put Option']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # NaN 값 제거
+    df_cleaned = df.dropna().copy()
+
+    if df_cleaned.empty:
+        print(f"오류: {market_type} 데이터가 비어있거나 필수 컬럼이 없습니다.")
+        return None
+
+    # RSI 계산
+    df_cleaned = calculate_rsi(df_cleaned, market_type)
+
+    # Fear & Greed Index 계산
+    df_cleaned = calculate_fear_greed(
+        df_cleaned,
+        market_type,
+        '코스피 200 변동성지수',
+        'Call Option',
+        'Put Option',
+        '5년 국채선물 추종 지수',
+        '10년국채선물지수'
+    )
+
+    # MACD 오실레이터 계산
+    df_cleaned = calculate_macd(df_cleaned, column='Fear_Greed_Index')
+
+    # 결과 저장
+    output_filename = f'{market_type.lower()}_fear_greed_analysis.csv'
+    df_cleaned.to_csv(output_filename, index=False, encoding='utf-8-sig')
+    print(f"\n분석 결과가 '{output_filename}' 파일로 저장되었습니다.")
+
+    # 그래프 생성
+    plot_fear_greed_oscillator(df_cleaned, '거래일', market_type, market_type, months=6)
+
+    # 통계 요약
+    print(f"\n[ {market_type} Fear & Greed Index 통계 요약 ]")
+    print(f"평균 Fear & Greed Index: {df_cleaned['Fear_Greed_Index'].mean():.4f}")
+    print(f"최대 Fear & Greed Index: {df_cleaned['Fear_Greed_Index'].max():.4f}")
+    print(f"최소 Fear & Greed Index: {df_cleaned['Fear_Greed_Index'].min():.4f}")
+    print(f"평균 Oscillator: {df_cleaned['Oscillator'].mean():.4f}")
+
+    return df_cleaned
+
+
 def main():
     """메인 함수 - 옵션 데이터와 채권 지수 데이터 조회 예시"""
     print("=" * 80)
@@ -533,6 +788,28 @@ def main():
         f"✓ 10년 국채 지수 데이터: {'성공' if bond_10y_df is not None and not bond_10y_df.empty else '실패'}"
     )
     print("=" * 80)
+
+    # ========== Fear & Greed Index 분석 (선택사항) ==========
+    # combine_data를 사용하여 Fear & Greed Index를 계산하려면 아래 코드를 활성화하세요.
+    # combine_data는 다음 컬럼들을 포함해야 합니다:
+    # - Date 또는 거래일: 날짜
+    # - KOSPI 또는 KOSDAQ: 시장 지수
+    # - Call Option: Call 옵션 거래량
+    # - Put Option: Put 옵션 거래량
+    # - 5년 국채선물 추종 지수: 5년 국채 지수
+    # - 10년국채선물지수: 10년 국채 지수
+    # - 코스피 200 변동성지수: 변동성 지수
+
+    # 예시: combine_data를 준비한 경우
+    # if combine_data is not None and not combine_data.empty:
+    #     # KOSPI Fear & Greed Index 분석
+    #     kospi_fg_result = analyze_fear_greed_index(combine_data, market_type='KOSPI')
+    #
+    #     # KOSDAQ Fear & Greed Index 분석
+    #     kosdaq_fg_result = analyze_fear_greed_index(combine_data, market_type='KOSDAQ')
+
+    print("\n참고: Fear & Greed Index 분석을 실행하려면 'analyze_fear_greed_index()' 함수를 호출하세요.")
+    print("필요한 데이터: Date, KOSPI/KOSDAQ, Call Option, Put Option, 5년/10년 국채 지수, 변동성 지수")
 
 
 if __name__ == "__main__":

@@ -431,6 +431,15 @@ def plot_fear_greed(df, idx_col, title, filename):
 
 def analyze_fear_greed(combined_df):
     """Fear & Greed 분석 수행"""
+    print(f"\n📊 analyze_fear_greed 시작")
+    print(f"입력 데이터: {len(combined_df)} 행, 컬럼: {list(combined_df.columns)}")
+
+    # 각 컬럼의 non-NaN 데이터 개수 확인
+    print(f"\n각 컬럼의 데이터 개수:")
+    for col in combined_df.columns:
+        non_nan_count = combined_df[col].notna().sum()
+        print(f"  {col}: {non_nan_count}/{len(combined_df)}")
+
     # 날짜를 datetime으로 변환
     combined_df['거래일'] = pd.to_datetime(combined_df['거래일'])
 
@@ -449,8 +458,15 @@ def analyze_fear_greed(combined_df):
         print(f"❌ 오류: 필수 컬럼이 없습니다: {missing_cols}")
         return None, None
 
+    print(f"\n필수 컬럼의 데이터 개수 (dropna 전):")
+    for col in required_cols:
+        non_nan_count = combined_df[col].notna().sum()
+        print(f"  {col}: {non_nan_count}/{len(combined_df)}")
+
     # 원본 데이터의 NaN만 제거 (KOSPI/KOSDAQ 제외)
+    print(f"\ndropna 전: {len(combined_df)} 행")
     combined_df = combined_df.dropna(subset=required_cols).copy()
+    print(f"dropna 후: {len(combined_df)} 행")
 
     # 데이터 충분성 확인
     if len(combined_df) < 125:

@@ -261,8 +261,44 @@ def combine_data(start, end, debug=False):
     bond5y = idx.parse(idx.get(start, end, "5년국채"))
     bond10y = idx.parse(idx.get(start, end, "10년국채"))
     vkospi = idx.parse(idx.get(start, end, "VKOSPI"))
-    kospi = idx.parse(idx.get(start, end, "KOSPI"))
-    kosdaq = idx.parse(idx.get(start, end, "KOSDAQ"))
+
+    # KOSPI 데이터 수집 (디버깅)
+    if debug:
+        print(f"\n{'='*80}\nKOSPI 데이터 수집 중...\n{'='*80}")
+    kospi_data = idx.get(start, end, "KOSPI")
+    if debug:
+        if kospi_data:
+            print(f"KOSPI API 응답 키: {list(kospi_data.keys())}")
+            if "output" in kospi_data:
+                print(f"output 데이터 개수: {len(kospi_data['output'])}")
+                if kospi_data['output']:
+                    print(f"첫 데이터 샘플: {kospi_data['output'][0]}")
+            if "block1" in kospi_data:
+                print(f"block1 데이터 개수: {len(kospi_data['block1'])}")
+                if kospi_data['block1']:
+                    print(f"첫 데이터 샘플: {kospi_data['block1'][0]}")
+        else:
+            print("⚠️  KOSPI API 응답이 None입니다.")
+    kospi = idx.parse(kospi_data)
+
+    # KOSDAQ 데이터 수집 (디버깅)
+    if debug:
+        print(f"\n{'='*80}\nKOSDAQ 데이터 수집 중...\n{'='*80}")
+    kosdaq_data = idx.get(start, end, "KOSDAQ")
+    if debug:
+        if kosdaq_data:
+            print(f"KOSDAQ API 응답 키: {list(kosdaq_data.keys())}")
+            if "output" in kosdaq_data:
+                print(f"output 데이터 개수: {len(kosdaq_data['output'])}")
+                if kosdaq_data['output']:
+                    print(f"첫 데이터 샘플: {kosdaq_data['output'][0]}")
+            if "block1" in kosdaq_data:
+                print(f"block1 데이터 개수: {len(kosdaq_data['block1'])}")
+                if kosdaq_data['block1']:
+                    print(f"첫 데이터 샘플: {kosdaq_data['block1'][0]}")
+        else:
+            print("⚠️  KOSDAQ API 응답이 None입니다.")
+    kosdaq = idx.parse(kosdaq_data)
 
     # 유효성 검사 (KOSPI/KOSDAQ는 선택사항)
     if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi]):
@@ -291,10 +327,33 @@ def combine_data(start, end, debug=False):
     # KOSPI, KOSDAQ이 있으면 추가
     if kospi is not None and not kospi.empty:
         dfs.append(kospi[["거래일", "종가"]].rename(columns={"종가": "KOSPI"}))
+        if debug:
+            print(f"\n✓ KOSPI 데이터 추가: {len(kospi)} 행")
+            print(kospi.head().to_string(index=False))
+    else:
+        if debug:
+            print(f"\n⚠️  KOSPI 데이터 없음 (kospi is None: {kospi is None}, kospi.empty: {kospi.empty if kospi is not None else 'N/A'})")
+
     if kosdaq is not None and not kosdaq.empty:
         dfs.append(kosdaq[["거래일", "종가"]].rename(columns={"종가": "KOSDAQ"}))
+        if debug:
+            print(f"\n✓ KOSDAQ 데이터 추가: {len(kosdaq)} 행")
+            print(kosdaq.head().to_string(index=False))
+    else:
+        if debug:
+            print(f"\n⚠️  KOSDAQ 데이터 없음 (kosdaq is None: {kosdaq is None}, kosdaq.empty: {kosdaq.empty if kosdaq is not None else 'N/A'})")
 
     result = reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs)
+
+    if debug:
+        print(f"\n{'='*80}\n병합된 데이터 컬럼\n{'='*80}")
+        print(f"컬럼: {list(result.columns)}")
+        print(f"데이터 행 수: {len(result)}")
+        if 'KOSPI' in result.columns:
+            print(f"KOSPI 데이터 개수: {result['KOSPI'].notna().sum()}")
+        if 'KOSDAQ' in result.columns:
+            print(f"KOSDAQ 데이터 개수: {result['KOSDAQ'].notna().sum()}")
+
     return result.sort_values("거래일").reset_index(drop=True)
 
 

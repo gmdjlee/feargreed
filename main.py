@@ -5,6 +5,7 @@ from functools import reduce
 
 import pandas as pd
 import requests
+from pykrx import stock
 
 # 한글 출력 문제 해결
 if sys.platform == "win32":
@@ -233,8 +234,20 @@ def combine_data(start_date, end_date, debug=False):
     bond10y_df = index.parse(index.get(start_date, end_date, "10년국채"))
     vkospi_df = index.parse(index.get(start_date, end_date, "VKOSPI"))
 
+    # pykrx로 코스피, 코스닥 지수 데이터 수집
+    kospi_raw = stock.get_index_ohlcv(start_date, end_date, "1001")
+    kosdaq_raw = stock.get_index_ohlcv(start_date, end_date, "2001")
+
+    # 인덱스를 거래일 컬럼으로 변환, 종가만 선택
+    kospi_df = kospi_raw.reset_index()[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": "KOSPI"})
+    kosdaq_df = kosdaq_raw.reset_index()[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": "KOSDAQ"})
+
+    # 날짜 형식 변환 (datetime -> YYYY-MM-DD)
+    kospi_df["거래일"] = kospi_df["거래일"].apply(lambda x: x.strftime("%Y-%m-%d"))
+    kosdaq_df["거래일"] = kosdaq_df["거래일"].apply(lambda x: x.strftime("%Y-%m-%d"))
+
     # 데이터 존재 확인
-    if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df]):
+    if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df, kospi_df, kosdaq_df]):
         return None
 
     # 거래일 기준 정렬 (5일 이동평균 계산 전 필수!)
@@ -268,6 +281,8 @@ def combine_data(start_date, end_date, debug=False):
         bond5y_df[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
         bond10y_df[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
         vkospi_df[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
+        kospi_df,
+        kosdaq_df,
         call_df[["거래일", "Call Option"]],
         put_df[["거래일", "Put Option"]],
     ]

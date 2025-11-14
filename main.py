@@ -237,6 +237,10 @@ def combine_data(start_date, end_date, debug=False):
     if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df]):
         return None
 
+    # 거래일 기준 정렬 (5일 이동평균 계산 전 필수!)
+    call_df = call_df.sort_values("거래일").reset_index(drop=True)
+    put_df = put_df.sort_values("거래일").reset_index(drop=True)
+
     # 디버깅: 원본 데이터 확인
     if debug:
         print("\n" + "=" * 80)

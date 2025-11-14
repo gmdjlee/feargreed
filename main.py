@@ -64,12 +64,16 @@ INDEX_NAMES = {
 }
 
 
-def format_date(date_str):
-    """날짜 형식 변환 (YYYYMMDD -> YYYY-MM-DD)"""
-    try:
-        return datetime.strptime(date_str, "%Y%m%d").strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        return date_str
+def to_date_str(val):
+    """날짜를 YYYY-MM-DD 형식으로 변환"""
+    if isinstance(val, str):
+        if "/" in val:
+            return val.replace("/", "-")
+        try:
+            return datetime.strptime(val, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return val
+    return val.strftime("%Y-%m-%d") if hasattr(val, "strftime") else val
 
 
 def fetch(session, url, headers, payload):
@@ -141,9 +145,7 @@ class OptionData(BaseFetcher):
 
         # 날짜 형식 변환
         if "거래일" in df.columns:
-            df["거래일"] = df["거래일"].apply(
-                lambda x: x.replace("/", "-") if "/" in str(x) else format_date(str(x))
-            )
+            df["거래일"] = df["거래일"].apply(to_date_str)
 
         # 숫자 변환
         for col in ["기관합계", "기타법인", "개인", "외국인합계", "전체"]:
@@ -212,117 +214,93 @@ class IndexData(BaseFetcher):
 
         # 날짜 형식 변환
         if "거래일" in df.columns:
-            df["거래일"] = df["거래일"].apply(
-                lambda x: x.replace("/", "-") if "/" in str(x) else format_date(str(x))
-            )
+            df["거래일"] = df["거래일"].apply(to_date_str)
 
         # 컬럼 순서 정렬
         cols = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
         return df[[c for c in cols if c in df.columns]]
 
 
-def combine_data(start_date, end_date, debug=False):
+def get_market_indices(start, end):
+    """코스피, 코스닥 지수 데이터 수집"""
+    indices = {}
+    for ticker, name in [("1001", "KOSPI"), ("2001", "KOSDAQ")]:
+        df = stock.get_index_ohlcv(start, end, ticker).reset_index()
+        indices[name] = df[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": name})
+        indices[name]["거래일"] = indices[name]["거래일"].apply(to_date_str)
+    return indices["KOSPI"], indices["KOSDAQ"]
+
+
+def combine_data(start, end, debug=False):
     """모든 데이터를 조합하여 JSON 생성"""
-    # 옵션 데이터 수집
-    option = OptionData()
-    call_df = option.parse(option.get(start_date, end_date, "C"))
-    put_df = option.parse(option.get(start_date, end_date, "P"))
+    # 데이터 수집
+    opt = OptionData()
+    call = opt.parse(opt.get(start, end, "C"))
+    put = opt.parse(opt.get(start, end, "P"))
 
-    # 지수 데이터 수집
-    index = IndexData()
-    bond5y_df = index.parse(index.get(start_date, end_date, "5년국채"))
-    bond10y_df = index.parse(index.get(start_date, end_date, "10년국채"))
-    vkospi_df = index.parse(index.get(start_date, end_date, "VKOSPI"))
+    idx = IndexData()
+    bond5y = idx.parse(idx.get(start, end, "5년국채"))
+    bond10y = idx.parse(idx.get(start, end, "10년국채"))
+    vkospi = idx.parse(idx.get(start, end, "VKOSPI"))
 
-    # pykrx로 코스피, 코스닥 지수 데이터 수집
-    kospi_raw = stock.get_index_ohlcv(start_date, end_date, "1001")
-    kosdaq_raw = stock.get_index_ohlcv(start_date, end_date, "2001")
+    kospi, kosdaq = get_market_indices(start, end)
 
-    # 인덱스를 거래일 컬럼으로 변환, 종가만 선택
-    kospi_df = kospi_raw.reset_index()[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": "KOSPI"})
-    kosdaq_df = kosdaq_raw.reset_index()[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": "KOSDAQ"})
-
-    # 날짜 형식 변환 (datetime -> YYYY-MM-DD)
-    kospi_df["거래일"] = kospi_df["거래일"].apply(lambda x: x.strftime("%Y-%m-%d"))
-    kosdaq_df["거래일"] = kosdaq_df["거래일"].apply(lambda x: x.strftime("%Y-%m-%d"))
-
-    # 데이터 존재 확인
-    if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df, kospi_df, kosdaq_df]):
+    # 유효성 검사
+    if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi, kospi, kosdaq]):
         return None
 
-    # 거래일 기준 정렬 (5일 이동평균 계산 전 필수!)
-    call_df = call_df.sort_values("거래일").reset_index(drop=True)
-    put_df = put_df.sort_values("거래일").reset_index(drop=True)
+    # 옵션 5일 이동평균 계산
+    for df, col in [(call, "Call Option"), (put, "Put Option")]:
+        df.sort_values("거래일", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        df[col] = df["전체"].rolling(5).mean()
 
-    # 디버깅: 원본 데이터 확인
+    # 디버그 출력
     if debug:
-        print("\n" + "=" * 80)
-        print("디버깅: Call 옵션 원본 데이터 (전체 컬럼)")
-        print("=" * 80)
-        print(call_df[["거래일", "전체"]].to_string(index=False))
+        print(f"\n{'='*80}\nCall 옵션 5일 이동평균\n{'='*80}")
+        print(call[["거래일", "전체", "Call Option"]].to_string(index=False))
 
-    # Call/Put 옵션 5일 이동평균 계산 (5일 미만 데이터는 NaN)
-    call_df["Call Option"] = call_df["전체"].rolling(window=5).mean()
-    put_df["Put Option"] = put_df["전체"].rolling(window=5).mean()
-
-    # 디버깅: 5일 이동평균 계산 결과 확인
-    if debug:
-        print("\n" + "=" * 80)
-        print("디버깅: Call 옵션 5일 이동평균 계산 결과")
-        print("=" * 80)
-        print(call_df[["거래일", "전체", "Call Option"]].to_string(index=False))
-        print("\n2025-11-07의 Call Option 값:",
-              call_df.loc[call_df["거래일"] == "2025-11-07", "Call Option"].values[0]
-              if not call_df[call_df["거래일"] == "2025-11-07"].empty else "없음")
-        print("=" * 80)
-
-    # 거래일 기준으로 병합
+    # 데이터 병합
     dfs = [
-        bond5y_df[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
-        bond10y_df[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
-        vkospi_df[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
-        kospi_df,
-        kosdaq_df,
-        call_df[["거래일", "Call Option"]],
-        put_df[["거래일", "Put Option"]],
+        bond5y[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
+        bond10y[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
+        vkospi[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
+        kospi, kosdaq,
+        call[["거래일", "Call Option"]],
+        put[["거래일", "Put Option"]],
     ]
-    result = reduce(lambda left, right: left.merge(right, on="거래일", how="outer"), dfs)
 
-    # 거래일 기준 정렬
+    result = reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs)
     return result.sort_values("거래일").reset_index(drop=True)
+
+
+def save_csv(df, filename):
+    """CSV 파일 저장"""
+    if df is not None and not df.empty:
+        df.to_csv(filename, index=False, encoding="utf-8-sig")
 
 
 def main(debug=False):
     """메인 함수"""
     start, end = "20251103", "20251108"
 
-    # 개별 CSV 파일 저장
-    option = OptionData()
-    for opt_type, name in [("C", "call"), ("P", "put")]:
-        df = option.parse(option.get(start, end, opt_type))
-        if df is not None and not df.empty:
-            df.to_csv(f"kospi200_{name}_option_{start}_{end}.csv", index=False, encoding="utf-8-sig")
+    # 개별 데이터 저장
+    opt = OptionData()
+    for typ, name in [("C", "call"), ("P", "put")]:
+        save_csv(opt.parse(opt.get(start, end, typ)), f"kospi200_{name}_option_{start}_{end}.csv")
 
-    index = IndexData()
-    for key, filename in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200")]:
-        df = index.parse(index.get(start, end, key))
-        if df is not None and not df.empty:
-            df.to_csv(f"{filename}_index_{start}_{end}.csv", index=False, encoding="utf-8-sig")
+    idx = IndexData()
+    for key, name in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200")]:
+        save_csv(idx.parse(idx.get(start, end, key)), f"{name}_index_{start}_{end}.csv")
 
-    # 조합 데이터 생성 및 JSON 저장
-    combined = combine_data(start, end, debug=debug)
+    # 조합 데이터 생성 및 저장
+    combined = combine_data(start, end, debug)
     if combined is not None and not combined.empty:
-        # JSON 파일 저장
         combined.to_json(f"combined_data_{start}_{end}.json", orient="records", force_ascii=False, indent=2)
-        # CSV 파일 저장 (탭 구분)
         combined.to_csv(f"combined_data_{start}_{end}.csv", index=False, encoding="utf-8-sig", sep="\t")
-
         if debug:
-            print("\n" + "=" * 80)
-            print("최종 조합 데이터")
-            print("=" * 80)
+            print(f"\n{'='*80}\n최종 조합 데이터\n{'='*80}")
             print(combined.to_string(index=False))
-            print("=" * 80)
 
 
 if __name__ == "__main__":

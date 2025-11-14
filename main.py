@@ -60,6 +60,19 @@ BOND_IDX = {
     "10y": {"name": "10년국채선물지수", "code": "897"},
 }
 
+MARKET_IDX = {
+    "KOSPI": {"name": "KOSPI", "code": "001"},
+    "KOSDAQ": {"name": "KOSDAQ", "code": "301"},
+}
+
+VIX_PAYLOAD = {
+    "bld": "dbms/MDC/STAT/standard/MDCSTAT30301",
+    "locale": "ko_KR",
+    "trdDd": "",
+    "share": "1",
+    "money": "1",
+}
+
 
 # ========== 유틸리티 함수 ==========
 
@@ -123,6 +136,40 @@ class KRXDataFetcher:
 
         return self._post_request(session, payload, BOND_HEADERS, bond_type)
 
+    def fetch_market_index(self, start_date, end_date, market="KOSPI"):
+        """시장 지수 조회 (KOSPI, KOSDAQ)"""
+        session = init_session(
+            "https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101",
+            BOND_HEADERS
+        )
+
+        idx = MARKET_IDX[market]
+        payload = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT00101",
+            "locale": "ko_KR",
+            "mktId": "STK" if market == "KOSPI" else "KSQ",
+            "idxIndMidclssCd": idx["code"],
+            "trdDd": end_date,
+            "strtDd": start_date,
+            "endDd": end_date,
+            "share": "1",
+            "money": "1",
+        }
+
+        return self._post_request(session, payload, BOND_HEADERS, market)
+
+    def fetch_vix(self, start_date, end_date):
+        """KOSPI 200 변동성지수 조회"""
+        session = init_session(
+            "https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020301",
+            BOND_HEADERS
+        )
+
+        payload = VIX_PAYLOAD.copy()
+        payload.update({"strtDd": start_date, "endDd": end_date})
+
+        return self._post_request(session, payload, BOND_HEADERS, "VIX")
+
     def _post_request(self, session, payload, headers, data_type):
         """공통 POST 요청 처리"""
         try:
@@ -176,6 +223,70 @@ class KRXDataFetcher:
 
         print(f"\n{data_type} 데이터 조회 완료 ({len(df)}건)")
         return df
+
+
+# ========== 데이터 결합 ==========
+
+
+def create_combine_data(call_df, put_df, bond5y_df, bond10y_df, market_df, vix_df, market="KOSPI"):
+    """모든 데이터를 날짜 기준으로 병합하여 combine_data 생성"""
+    print(f"\n{'='*60}")
+    print(f"{market} combine_data 생성 중...")
+    print(f"{'='*60}")
+
+    # 날짜 컬럼 통일
+    for df in [call_df, put_df, bond5y_df, bond10y_df, market_df, vix_df]:
+        if df is not None and "거래일" in df.columns:
+            df["Date"] = pd.to_datetime(df["거래일"])
+
+    # Call/Put 옵션 데이터 병합
+    if call_df is not None and put_df is not None:
+        call_df = call_df.rename(columns={"전체": "Call Option"})
+        put_df = put_df.rename(columns={"전체": "Put Option"})
+        option_df = pd.merge(
+            call_df[["Date", "Call Option"]],
+            put_df[["Date", "Put Option"]],
+            on="Date",
+            how="outer"
+        )
+    else:
+        print("오류: Call/Put 옵션 데이터 없음")
+        return None
+
+    # 채권 데이터 병합
+    if bond5y_df is not None:
+        bond5y_df = bond5y_df.rename(columns={"IDX_CLSPRC": "5년 국채선물 추종 지수"})
+        combine = pd.merge(option_df, bond5y_df[["Date", "5년 국채선물 추종 지수"]], on="Date", how="outer")
+    else:
+        combine = option_df.copy()
+
+    if bond10y_df is not None:
+        bond10y_df = bond10y_df.rename(columns={"IDX_CLSPRC": "10년국채선물지수"})
+        combine = pd.merge(combine, bond10y_df[["Date", "10년국채선물지수"]], on="Date", how="outer")
+
+    # 시장 지수 병합
+    if market_df is not None:
+        market_df = market_df.rename(columns={"CLSPRC_IDX": market})
+        combine = pd.merge(combine, market_df[["Date", market]], on="Date", how="outer")
+    else:
+        print(f"오류: {market} 지수 데이터 없음")
+        return None
+
+    # VIX 병합
+    if vix_df is not None:
+        vix_df = vix_df.rename(columns={"CLSPRC": "코스피 200 변동성지수"})
+        combine = pd.merge(combine, vix_df[["Date", "코스피 200 변동성지수"]], on="Date", how="outer")
+    else:
+        print("오류: VIX 데이터 없음")
+        return None
+
+    # 날짜 정렬 및 NaN 제거
+    combine = combine.sort_values("Date").reset_index(drop=True)
+
+    print(f"\n결합 완료: {len(combine)}건")
+    print(f"컬럼: {list(combine.columns)}")
+
+    return combine
 
 
 # ========== Fear & Greed Index 계산 ==========
@@ -313,45 +424,64 @@ def analyze_fg_index(data, market="KOSPI"):
 
 def main():
     print("="*60)
-    print("KRX 파생상품 데이터 조회")
+    print("KRX 파생상품 데이터 조회 & Fear & Greed Index 분석")
     print("="*60)
 
-    start = "20251103"
-    end = "20251108"
+    start = "20240101"
+    end = "20241231"
 
     fetcher = KRXDataFetcher()
 
-    # 옵션 데이터
     print(f"\n조회 기간: {fmt_date(start)} ~ {fmt_date(end)}")
 
+    # 1. 옵션 데이터
     call_data = fetcher.fetch_option(start, end, "C")
     call_df = fetcher.parse_data(call_data, "Call")
 
     put_data = fetcher.fetch_option(start, end, "P")
     put_df = fetcher.parse_data(put_data, "Put")
 
-    # 채권 데이터
+    # 2. 채권 데이터
     bond5y_data = fetcher.fetch_bond(start, end, "5y")
     bond5y_df = fetcher.parse_data(bond5y_data, "5년 국채")
 
     bond10y_data = fetcher.fetch_bond(start, end, "10y")
     bond10y_df = fetcher.parse_data(bond10y_data, "10년 국채")
 
-    # 요약
+    # 3. KOSPI 지수
+    kospi_data = fetcher.fetch_market_index(start, end, "KOSPI")
+    kospi_idx_df = fetcher.parse_data(kospi_data, "KOSPI 지수")
+
+    # 4. VIX
+    vix_data = fetcher.fetch_vix(start, end)
+    vix_df = fetcher.parse_data(vix_data, "VIX")
+
+    # 조회 결과 요약
     print(f"\n{'='*60}")
-    print("조회 결과")
+    print("데이터 조회 결과")
     print(f"{'='*60}")
     print(f"Call 옵션: {'✓' if call_df is not None else '✗'}")
     print(f"Put 옵션: {'✓' if put_df is not None else '✗'}")
     print(f"5년 국채: {'✓' if bond5y_df is not None else '✗'}")
     print(f"10년 국채: {'✓' if bond10y_df is not None else '✗'}")
+    print(f"KOSPI 지수: {'✓' if kospi_idx_df is not None else '✗'}")
+    print(f"VIX: {'✓' if vix_df is not None else '✗'}")
 
-    # Fear & Greed 분석 예시
-    # combine_data를 준비한 후:
-    # kospi_fg = analyze_fg_index(combine_data, "KOSPI")
-    # kosdaq_fg = analyze_fg_index(combine_data, "KOSDAQ")
+    # combine_data 생성
+    combine_data = create_combine_data(
+        call_df, put_df, bond5y_df, bond10y_df, kospi_idx_df, vix_df, market="KOSPI"
+    )
 
-    print(f"\n참고: analyze_fg_index(combine_data, market) 함수로 FG 분석 실행")
+    # Fear & Greed Index 분석
+    if combine_data is not None:
+        kospi_fg = analyze_fg_index(combine_data, "KOSPI")
+
+        if kospi_fg is not None:
+            print(f"\n{'='*60}")
+            print("분석 완료!")
+            print(f"{'='*60}")
+    else:
+        print("\n오류: combine_data 생성 실패")
 
 
 if __name__ == "__main__":

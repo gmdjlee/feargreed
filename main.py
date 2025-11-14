@@ -248,9 +248,9 @@ def combine_data(start_date, end_date, debug=False):
         print("=" * 80)
         print(call_df[["거래일", "전체"]].to_string(index=False))
 
-    # Call/Put 옵션 5일 이동평균 계산
-    call_df["Call Option"] = call_df["전체"].rolling(window=5, min_periods=1).mean()
-    put_df["Put Option"] = put_df["전체"].rolling(window=5, min_periods=1).mean()
+    # Call/Put 옵션 5일 이동평균 계산 (5일 미만 데이터는 NaN)
+    call_df["Call Option"] = call_df["전체"].rolling(window=5).mean()
+    put_df["Put Option"] = put_df["전체"].rolling(window=5).mean()
 
     # 디버깅: 5일 이동평균 계산 결과 확인
     if debug:

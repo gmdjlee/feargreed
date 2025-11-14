@@ -229,12 +229,28 @@ class IndexData(BaseFetcher):
 
 def get_market_indices(start, end):
     """코스피, 코스닥 지수 데이터 수집"""
-    indices = {}
-    for ticker, name in [("1001", "KOSPI"), ("2001", "KOSDAQ")]:
-        df = stock.get_index_ohlcv(start, end, ticker).reset_index()
-        indices[name] = df[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": name})
-        indices[name]["거래일"] = indices[name]["거래일"].apply(to_date_str)
-    return indices["KOSPI"], indices["KOSDAQ"]
+    try:
+        indices = {}
+        for ticker, name in [("1001", "KOSPI"), ("2001", "KOSDAQ")]:
+            df = stock.get_index_ohlcv(start, end, ticker).reset_index()
+            if df.empty:
+                # 빈 데이터프레임 생성
+                df = pd.DataFrame(columns=["거래일", name])
+            else:
+                indices[name] = df[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": name})
+                indices[name]["거래일"] = indices[name]["거래일"].apply(to_date_str)
+
+        if "KOSPI" not in indices or "KOSDAQ" not in indices:
+            # 기본 빈 데이터프레임 생성
+            return (pd.DataFrame(columns=["거래일", "KOSPI"]),
+                    pd.DataFrame(columns=["거래일", "KOSDAQ"]))
+
+        return indices["KOSPI"], indices["KOSDAQ"]
+    except Exception as e:
+        print(f"⚠️  경고: pykrx를 통한 KOSPI/KOSDAQ 데이터 수집 실패: {e}")
+        print("    빈 데이터프레임으로 계속 진행합니다.")
+        return (pd.DataFrame(columns=["거래일", "KOSPI"]),
+                pd.DataFrame(columns=["거래일", "KOSDAQ"]))
 
 
 def combine_data(start, end, debug=False):
@@ -251,8 +267,8 @@ def combine_data(start, end, debug=False):
 
     kospi, kosdaq = get_market_indices(start, end)
 
-    # 유효성 검사
-    if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi, kospi, kosdaq]):
+    # 유효성 검사 (KOSPI/KOSDAQ는 선택사항)
+    if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi]):
         return None
 
     # 옵션 5일 이동평균 계산
@@ -357,37 +373,79 @@ def analyze_fear_greed(combined_df):
     # 날짜를 datetime으로 변환
     combined_df['거래일'] = pd.to_datetime(combined_df['거래일'])
 
-    # 수치형 변환 및 NaN 제거
+    # 수치형 변환
     numeric_cols = ['5년 국채선물 추종 지수', '10년국채선물지수', '코스피 200 변동성지수',
                     'KOSPI', 'KOSDAQ', 'Call Option', 'Put Option']
     for col in numeric_cols:
-        combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce')
+        if col in combined_df.columns:
+            combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce')
 
-    combined_df = combined_df.dropna().copy()
+    # 필수 컬럼 확인
+    required_cols = ['5년 국채선물 추종 지수', '10년국채선물지수', '코스피 200 변동성지수',
+                     'Call Option', 'Put Option']
+    missing_cols = [col for col in required_cols if col not in combined_df.columns]
+    if missing_cols:
+        print(f"❌ 오류: 필수 컬럼이 없습니다: {missing_cols}")
+        return None, None
 
-    # KOSPI 분석
-    kospi_df = combined_df.copy()
-    kospi_df = calc_rsi(kospi_df, 'KOSPI')
-    kospi_df = calc_fear_greed(kospi_df, 'KOSPI', '코스피 200 변동성지수', 'Call Option', 'Put Option',
-                               '5년 국채선물 추종 지수', '10년국채선물지수')
-    kospi_df = calc_macd(kospi_df, 'Fear_Greed_Index')
+    # 원본 데이터의 NaN만 제거 (KOSPI/KOSDAQ 제외)
+    combined_df = combined_df.dropna(subset=required_cols).copy()
 
-    # KOSDAQ 분석
-    kosdaq_df = combined_df.copy()
-    kosdaq_df = calc_rsi(kosdaq_df, 'KOSDAQ')
-    kosdaq_df = calc_fear_greed(kosdaq_df, 'KOSDAQ', '코스피 200 변동성지수', 'Call Option', 'Put Option',
-                                '5년 국채선물 추종 지수', '10년국채선물지수')
-    kosdaq_df = calc_macd(kosdaq_df, 'Fear_Greed_Index')
+    # 데이터 충분성 확인
+    if len(combined_df) < 125:
+        print(f"⚠️  경고: 데이터가 {len(combined_df)}일로 부족합니다. 125일 이상의 데이터가 권장됩니다.")
+        print(f"    일부 지표가 정확하지 않을 수 있습니다.")
 
-    # 그래프 생성
-    plot_fear_greed(kospi_df, 'KOSPI', 'Fear & Greed Oscillator and KOSPI Index (Recent 6 Months)',
-                   'fear_greed_kospi.png')
-    plot_fear_greed(kosdaq_df, 'KOSDAQ', 'Fear & Greed Oscillator and KOSDAQ Index (Recent 6 Months)',
-                   'fear_greed_kosdaq.png')
+    kospi_df, kosdaq_df = None, None
 
-    # 결과 저장
-    kospi_df.to_csv('fear_greed_kospi.csv', index=False, encoding='utf-8-sig')
-    kosdaq_df.to_csv('fear_greed_kosdaq.csv', index=False, encoding='utf-8-sig')
+    # KOSPI 분석 (데이터가 있는 경우에만)
+    if 'KOSPI' in combined_df.columns and combined_df['KOSPI'].notna().any():
+        kospi_df = combined_df.copy()
+        kospi_df = calc_rsi(kospi_df, 'KOSPI')
+        kospi_df = calc_fear_greed(kospi_df, 'KOSPI', '코스피 200 변동성지수', 'Call Option', 'Put Option',
+                                   '5년 국채선물 추종 지수', '10년국채선물지수')
+        kospi_df = calc_macd(kospi_df, 'Fear_Greed_Index')
+        # 계산 후 NaN 제거
+        kospi_df = kospi_df.dropna().copy()
+
+        if len(kospi_df) > 0:
+            # 그래프 생성
+            plot_fear_greed(kospi_df, 'KOSPI', 'Fear & Greed Oscillator and KOSPI Index (Recent 6 Months)',
+                           'fear_greed_kospi.png')
+            # 결과 저장
+            kospi_df.to_csv('fear_greed_kospi.csv', index=False, encoding='utf-8-sig')
+        else:
+            print("⚠️  KOSPI: 계산 후 유효한 데이터가 없습니다.")
+            kospi_df = None
+    else:
+        print("⚠️  KOSPI 데이터가 없어 분석을 건너뜁니다.")
+
+    # KOSDAQ 분석 (데이터가 있는 경우에만)
+    if 'KOSDAQ' in combined_df.columns and combined_df['KOSDAQ'].notna().any():
+        kosdaq_df = combined_df.copy()
+        kosdaq_df = calc_rsi(kosdaq_df, 'KOSDAQ')
+        kosdaq_df = calc_fear_greed(kosdaq_df, 'KOSDAQ', '코스피 200 변동성지수', 'Call Option', 'Put Option',
+                                    '5년 국채선물 추종 지수', '10년국채선물지수')
+        kosdaq_df = calc_macd(kosdaq_df, 'Fear_Greed_Index')
+        # 계산 후 NaN 제거
+        kosdaq_df = kosdaq_df.dropna().copy()
+
+        if len(kosdaq_df) > 0:
+            # 그래프 생성
+            plot_fear_greed(kosdaq_df, 'KOSDAQ', 'Fear & Greed Oscillator and KOSDAQ Index (Recent 6 Months)',
+                           'fear_greed_kosdaq.png')
+            # 결과 저장
+            kosdaq_df.to_csv('fear_greed_kosdaq.csv', index=False, encoding='utf-8-sig')
+        else:
+            print("⚠️  KOSDAQ: 계산 후 유효한 데이터가 없습니다.")
+            kosdaq_df = None
+    else:
+        print("⚠️  KOSDAQ 데이터가 없어 분석을 건너뜁니다.")
+
+    # 결과 확인
+    if kospi_df is None and kosdaq_df is None:
+        print("❌ 오류: KOSPI와 KOSDAQ 모두 분석할 수 없습니다. 데이터를 확인해주세요.")
+        return None, None
 
     return kospi_df, kosdaq_df
 
@@ -396,20 +454,34 @@ def main(debug=False, analyze=True):
     """메인 함수"""
     start, end = "20251103", "20251108"
 
+    print(f"📊 데이터 수집 시작: {start} ~ {end}")
+
     # 개별 데이터 저장
     opt = OptionData()
     for typ, name in [("C", "call"), ("P", "put")]:
-        save_csv(opt.parse(opt.get(start, end, typ)), f"kospi200_{name}_option_{start}_{end}.csv")
+        df = opt.parse(opt.get(start, end, typ))
+        if df is not None and not df.empty:
+            save_csv(df, f"kospi200_{name}_option_{start}_{end}.csv")
+            print(f"✓ {name} 옵션 데이터 저장 완료 ({len(df)} rows)")
+        else:
+            print(f"⚠️  {name} 옵션 데이터 수집 실패")
 
     idx = IndexData()
     for key, name in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200")]:
-        save_csv(idx.parse(idx.get(start, end, key)), f"{name}_index_{start}_{end}.csv")
+        df = idx.parse(idx.get(start, end, key))
+        if df is not None and not df.empty:
+            save_csv(df, f"{name}_index_{start}_{end}.csv")
+            print(f"✓ {key} 데이터 저장 완료 ({len(df)} rows)")
+        else:
+            print(f"⚠️  {key} 데이터 수집 실패")
 
     # 조합 데이터 생성 및 저장
+    print("\n📈 조합 데이터 생성 중...")
     combined = combine_data(start, end, debug)
     if combined is not None and not combined.empty:
         combined.to_json(f"combined_data_{start}_{end}.json", orient="records", force_ascii=False, indent=2)
         combined.to_csv(f"combined_data_{start}_{end}.csv", index=False, encoding="utf-8-sig", sep="\t")
+        print(f"✓ 조합 데이터 저장 완료 ({len(combined)} rows)")
         if debug:
             print(f"\n{'='*80}\n최종 조합 데이터\n{'='*80}")
             print(combined.to_string(index=False))
@@ -418,8 +490,14 @@ def main(debug=False, analyze=True):
         if analyze:
             print(f"\n{'='*80}\nFear & Greed 분석 시작\n{'='*80}")
             kospi_fg, kosdaq_fg = analyze_fear_greed(combined)
-            print("✓ KOSPI Fear & Greed 분석 완료: fear_greed_kospi.csv, fear_greed_kospi.png")
-            print("✓ KOSDAQ Fear & Greed 분석 완료: fear_greed_kosdaq.csv, fear_greed_kosdaq.png")
+            if kospi_fg is not None:
+                print("✓ KOSPI Fear & Greed 분석 완료: fear_greed_kospi.csv, fear_greed_kospi.png")
+            if kosdaq_fg is not None:
+                print("✓ KOSDAQ Fear & Greed 분석 완료: fear_greed_kosdaq.csv, fear_greed_kosdaq.png")
+            if kospi_fg is None and kosdaq_fg is None:
+                print("⚠️  Fear & Greed 분석을 완료하지 못했습니다. 데이터 기간을 늘려주세요.")
+    else:
+        print("❌ 조합 데이터 생성 실패: 필수 데이터를 수집할 수 없습니다.")
 
 
 if __name__ == "__main__":

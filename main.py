@@ -251,6 +251,7 @@ def plot_fg_oscillator(df, date_col, idx_col, name="KOSPI", months=6):
     filename = f"{name.lower()}_fg_oscillator.png"
     plt.savefig(filename, dpi=300, bbox_inches="tight")
     print(f"그래프 저장: {filename}")
+    plt.show()
     plt.close()
 
 

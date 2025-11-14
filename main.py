@@ -56,9 +56,11 @@ INDEX_PAYLOAD = {
 
 # 지수 매핑
 INDEX_MAP = {
-    "5년국채": {"indTpCd": "D", "idxIndCd": "896", "idxCd": "D", "idxCd2": "896"},
-    "10년국채": {"indTpCd": "1", "idxIndCd": "309", "idxCd": "1", "idxCd2": "309"},
-    "VKOSPI": {"indTpCd": "1", "idxIndCd": "300", "idxCd": "1", "idxCd2": "300"},
+    "5년국채": {"type": "derivative", "indTpCd": "D", "idxIndCd": "896", "idxCd": "D", "idxCd2": "896"},
+    "10년국채": {"type": "derivative", "indTpCd": "1", "idxIndCd": "309", "idxCd": "1", "idxCd2": "309"},
+    "VKOSPI": {"type": "derivative", "indTpCd": "1", "idxIndCd": "300", "idxCd": "1", "idxCd2": "300"},
+    "KOSPI": {"type": "market", "indIdx": "1", "indIdx2": "001"},
+    "KOSDAQ": {"type": "market", "indIdx": "2", "indIdx2": "001"},
 }
 
 # 지수 전체 이름
@@ -66,6 +68,8 @@ INDEX_NAMES = {
     "5년국채": "5년 국채선물 추종 지수",
     "10년국채": "10년국채선물지수",
     "VKOSPI": "코스피 200 변동성지수",
+    "KOSPI": "코스피",
+    "KOSDAQ": "코스닥",
 }
 
 
@@ -179,50 +183,38 @@ class IndexData(BaseFetcher):
         info = INDEX_MAP[index_key]
         name = INDEX_NAMES[index_key]
 
-        payload = INDEX_PAYLOAD.copy()
-        payload.update(
-            {
+        # KOSPI/KOSDAQ (시장지수)와 파생상품 지수를 구분하여 처리
+        if info["type"] == "market":
+            # KOSPI/KOSDAQ용 payload
+            payload = {
+                "bld": "dbms/MDC/STAT/standard/MDCSTAT00301",
+                "locale": "ko_KR",
+                "tboxindIdx_finder_equidx0_4": name,
+                "indIdx": info["indIdx"],
+                "indIdx2": info["indIdx2"],
+                "codeNmindIdx_finder_equidx0_4": name,
+                "param1indIdx_finder_equidx0_4": "",
                 "strtDd": start_date,
                 "endDd": end_date,
-                "indTpCd": info["indTpCd"],
-                "idxIndCd": info["idxIndCd"],
-                "idxCd": info["idxCd"],
-                "idxCd2": info["idxCd2"],
-                "tboxidxCd_finder_drvetcidx0_1": name,
-                "codeNmidxCd_finder_drvetcidx0_1": name,
+                "share": "2",
+                "money": "3",
+                "csvxls_isNo": "false",
             }
-        )
-        return fetch(self.session, self.url, self.headers, payload)
-
-    def get_market_index(self, start_date, end_date, market_type):
-        """KOSPI/KOSDAQ 지수 데이터 조회
-
-        Args:
-            start_date: 시작일 (YYYYMMDD)
-            end_date: 종료일 (YYYYMMDD)
-            market_type: 'KOSPI' 또는 'KOSDAQ'
-        """
-        if market_type not in ['KOSPI', 'KOSDAQ']:
-            raise ValueError(f"Invalid market_type: {market_type}. Must be 'KOSPI' or 'KOSDAQ'")
-
-        # KOSPI는 코스피(1), KOSDAQ은 코스닥(2)
-        market_name = "코스피" if market_type == "KOSPI" else "코스닥"
-        ind_idx = "1" if market_type == "KOSPI" else "2"
-
-        payload = {
-            "bld": "dbms/MDC/STAT/standard/MDCSTAT00301",
-            "locale": "ko_KR",
-            "tboxindIdx_finder_equidx0_4": market_name,
-            "indIdx": ind_idx,
-            "indIdx2": "001",
-            "codeNmindIdx_finder_equidx0_4": market_name,
-            "param1indIdx_finder_equidx0_4": "",
-            "strtDd": start_date,
-            "endDd": end_date,
-            "share": "2",
-            "money": "3",
-            "csvxls_isNo": "false",
-        }
+        else:
+            # 파생상품 지수용 payload (5년국채, 10년국채, VKOSPI)
+            payload = INDEX_PAYLOAD.copy()
+            payload.update(
+                {
+                    "strtDd": start_date,
+                    "endDd": end_date,
+                    "indTpCd": info["indTpCd"],
+                    "idxIndCd": info["idxIndCd"],
+                    "idxCd": info["idxCd"],
+                    "idxCd2": info["idxCd2"],
+                    "tboxidxCd_finder_drvetcidx0_1": name,
+                    "codeNmidxCd_finder_drvetcidx0_1": name,
+                }
+            )
 
         return fetch(self.session, self.url, self.headers, payload)
 
@@ -258,53 +250,6 @@ class IndexData(BaseFetcher):
         return df[[c for c in cols if c in df.columns]]
 
 
-def get_market_indices(start, end):
-    """코스피, 코스닥 지수 데이터 수집"""
-    try:
-        idx = IndexData()
-        indices = {}
-
-        for market_type in ["KOSPI", "KOSDAQ"]:
-            data = idx.get_market_index(start, end, market_type)
-
-            # 디버깅: 응답 데이터 확인
-            if data is None:
-                print(f"⚠️  {market_type}: API 응답이 None입니다.")
-                indices[market_type] = pd.DataFrame(columns=["거래일", market_type])
-                continue
-
-            print(f"📊 {market_type} API 응답 키: {list(data.keys())}")
-            if "output" in data:
-                print(f"   output 데이터 개수: {len(data['output'])}")
-                if data['output']:
-                    print(f"   첫 데이터 컬럼: {list(data['output'][0].keys())}")
-            if "block1" in data:
-                print(f"   block1 데이터 개수: {len(data['block1'])}")
-                if data['block1']:
-                    print(f"   첫 데이터 컬럼: {list(data['block1'][0].keys())}")
-
-            df = idx.parse(data)
-
-            if df is not None and not df.empty:
-                # 종가 컬럼만 선택하고 컬럼명 변경
-                indices[market_type] = df[["거래일", "종가"]].rename(columns={"종가": market_type})
-                print(f"✓ {market_type} 데이터 수집 성공: {len(df)} 행")
-            else:
-                print(f"⚠️  {market_type}: 파싱 후 데이터가 비어있습니다.")
-                # 빈 데이터프레임 생성
-                indices[market_type] = pd.DataFrame(columns=["거래일", market_type])
-
-        return indices.get("KOSPI", pd.DataFrame(columns=["거래일", "KOSPI"])), \
-               indices.get("KOSDAQ", pd.DataFrame(columns=["거래일", "KOSDAQ"]))
-    except Exception as e:
-        print(f"⚠️  경고: KRX API를 통한 KOSPI/KOSDAQ 데이터 수집 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        print("    빈 데이터프레임으로 계속 진행합니다.")
-        return (pd.DataFrame(columns=["거래일", "KOSPI"]),
-                pd.DataFrame(columns=["거래일", "KOSDAQ"]))
-
-
 def combine_data(start, end, debug=False):
     """모든 데이터를 조합하여 JSON 생성"""
     # 데이터 수집
@@ -316,8 +261,8 @@ def combine_data(start, end, debug=False):
     bond5y = idx.parse(idx.get(start, end, "5년국채"))
     bond10y = idx.parse(idx.get(start, end, "10년국채"))
     vkospi = idx.parse(idx.get(start, end, "VKOSPI"))
-
-    kospi, kosdaq = get_market_indices(start, end)
+    kospi = idx.parse(idx.get(start, end, "KOSPI"))
+    kosdaq = idx.parse(idx.get(start, end, "KOSDAQ"))
 
     # 유효성 검사 (KOSPI/KOSDAQ는 선택사항)
     if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi]):
@@ -339,10 +284,15 @@ def combine_data(start, end, debug=False):
         bond5y[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
         bond10y[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
         vkospi[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
-        kospi, kosdaq,
         call[["거래일", "Call Option"]],
         put[["거래일", "Put Option"]],
     ]
+
+    # KOSPI, KOSDAQ이 있으면 추가
+    if kospi is not None and not kospi.empty:
+        dfs.append(kospi[["거래일", "종가"]].rename(columns={"종가": "KOSPI"}))
+    if kosdaq is not None and not kosdaq.empty:
+        dfs.append(kosdaq[["거래일", "종가"]].rename(columns={"종가": "KOSDAQ"}))
 
     result = reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs)
     return result.sort_values("거래일").reset_index(drop=True)
@@ -519,7 +469,8 @@ def main(debug=False, analyze=True):
             print(f"⚠️  {name} 옵션 데이터 수집 실패")
 
     idx = IndexData()
-    for key, name in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200")]:
+    for key, name in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200"),
+                      ("KOSPI", "kospi"), ("KOSDAQ", "kosdaq")]:
         df = idx.parse(idx.get(start, end, key))
         if df is not None and not df.empty:
             save_csv(df, f"{name}_index_{start}_{end}.csv")

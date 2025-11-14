@@ -220,7 +220,7 @@ class IndexData(BaseFetcher):
         return df[[c for c in cols if c in df.columns]]
 
 
-def combine_data(start_date, end_date):
+def combine_data(start_date, end_date, debug=False):
     """모든 데이터를 조합하여 JSON 생성"""
     # 옵션 데이터 수집
     option = OptionData()
@@ -237,9 +237,27 @@ def combine_data(start_date, end_date):
     if any(df is None or df.empty for df in [call_df, put_df, bond5y_df, bond10y_df, vkospi_df]):
         return None
 
+    # 디버깅: 원본 데이터 확인
+    if debug:
+        print("\n" + "=" * 80)
+        print("디버깅: Call 옵션 원본 데이터 (전체 컬럼)")
+        print("=" * 80)
+        print(call_df[["거래일", "전체"]].to_string(index=False))
+
     # Call/Put 옵션 5일 이동평균 계산
     call_df["Call Option"] = call_df["전체"].rolling(window=5, min_periods=1).mean()
     put_df["Put Option"] = put_df["전체"].rolling(window=5, min_periods=1).mean()
+
+    # 디버깅: 5일 이동평균 계산 결과 확인
+    if debug:
+        print("\n" + "=" * 80)
+        print("디버깅: Call 옵션 5일 이동평균 계산 결과")
+        print("=" * 80)
+        print(call_df[["거래일", "전체", "Call Option"]].to_string(index=False))
+        print("\n2025-11-07의 Call Option 값:",
+              call_df.loc[call_df["거래일"] == "2025-11-07", "Call Option"].values[0]
+              if not call_df[call_df["거래일"] == "2025-11-07"].empty else "없음")
+        print("=" * 80)
 
     # 거래일 기준으로 병합
     dfs = [
@@ -255,7 +273,7 @@ def combine_data(start_date, end_date):
     return result.sort_values("거래일").reset_index(drop=True)
 
 
-def main():
+def main(debug=False):
     """메인 함수"""
     start, end = "20251103", "20251108"
 
@@ -273,12 +291,19 @@ def main():
             df.to_csv(f"{filename}_index_{start}_{end}.csv", index=False, encoding="utf-8-sig")
 
     # 조합 데이터 생성 및 JSON 저장
-    combined = combine_data(start, end)
+    combined = combine_data(start, end, debug=debug)
     if combined is not None and not combined.empty:
         # JSON 파일 저장
         combined.to_json(f"combined_data_{start}_{end}.json", orient="records", force_ascii=False, indent=2)
         # CSV 파일 저장 (탭 구분)
         combined.to_csv(f"combined_data_{start}_{end}.csv", index=False, encoding="utf-8-sig", sep="\t")
+
+        if debug:
+            print("\n" + "=" * 80)
+            print("최종 조합 데이터")
+            print("=" * 80)
+            print(combined.to_string(index=False))
+            print("=" * 80)
 
 
 if __name__ == "__main__":

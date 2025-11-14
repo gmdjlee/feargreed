@@ -5,7 +5,6 @@ from functools import reduce
 
 import pandas as pd
 import requests
-from pykrx import stock
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 
@@ -195,6 +194,38 @@ class IndexData(BaseFetcher):
         )
         return fetch(self.session, self.url, self.headers, payload)
 
+    def get_market_index(self, start_date, end_date, market_type):
+        """KOSPI/KOSDAQ 지수 데이터 조회
+
+        Args:
+            start_date: 시작일 (YYYYMMDD)
+            end_date: 종료일 (YYYYMMDD)
+            market_type: 'KOSPI' 또는 'KOSDAQ'
+        """
+        if market_type not in ['KOSPI', 'KOSDAQ']:
+            raise ValueError(f"Invalid market_type: {market_type}. Must be 'KOSPI' or 'KOSDAQ'")
+
+        # KOSPI는 코스피(1), KOSDAQ은 코스닥(2)
+        market_name = "코스피" if market_type == "KOSPI" else "코스닥"
+        ind_idx = "1" if market_type == "KOSPI" else "2"
+
+        payload = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT00301",
+            "locale": "ko_KR",
+            "tboxindIdx_finder_equidx0_4": market_name,
+            "indIdx": ind_idx,
+            "indIdx2": "001",
+            "codeNmindIdx_finder_equidx0_4": market_name,
+            "param1indIdx_finder_equidx0_4": "",
+            "strtDd": start_date,
+            "endDd": end_date,
+            "share": "2",
+            "money": "3",
+            "csvxls_isNo": "false",
+        }
+
+        return fetch(self.session, self.url, self.headers, payload)
+
     def parse(self, data):
         """데이터 파싱"""
         if not data:
@@ -230,24 +261,24 @@ class IndexData(BaseFetcher):
 def get_market_indices(start, end):
     """코스피, 코스닥 지수 데이터 수집"""
     try:
+        idx = IndexData()
         indices = {}
-        for ticker, name in [("1001", "KOSPI"), ("2001", "KOSDAQ")]:
-            df = stock.get_index_ohlcv(start, end, ticker).reset_index()
-            if df.empty:
-                # 빈 데이터프레임 생성
-                df = pd.DataFrame(columns=["거래일", name])
+
+        for market_type in ["KOSPI", "KOSDAQ"]:
+            data = idx.get_market_index(start, end, market_type)
+            df = idx.parse(data)
+
+            if df is not None and not df.empty:
+                # 종가 컬럼만 선택하고 컬럼명 변경
+                indices[market_type] = df[["거래일", "종가"]].rename(columns={"종가": market_type})
             else:
-                indices[name] = df[["날짜", "종가"]].rename(columns={"날짜": "거래일", "종가": name})
-                indices[name]["거래일"] = indices[name]["거래일"].apply(to_date_str)
+                # 빈 데이터프레임 생성
+                indices[market_type] = pd.DataFrame(columns=["거래일", market_type])
 
-        if "KOSPI" not in indices or "KOSDAQ" not in indices:
-            # 기본 빈 데이터프레임 생성
-            return (pd.DataFrame(columns=["거래일", "KOSPI"]),
-                    pd.DataFrame(columns=["거래일", "KOSDAQ"]))
-
-        return indices["KOSPI"], indices["KOSDAQ"]
+        return indices.get("KOSPI", pd.DataFrame(columns=["거래일", "KOSPI"])), \
+               indices.get("KOSDAQ", pd.DataFrame(columns=["거래일", "KOSDAQ"]))
     except Exception as e:
-        print(f"⚠️  경고: pykrx를 통한 KOSPI/KOSDAQ 데이터 수집 실패: {e}")
+        print(f"⚠️  경고: KRX API를 통한 KOSPI/KOSDAQ 데이터 수집 실패: {e}")
         print("    빈 데이터프레임으로 계속 진행합니다.")
         return (pd.DataFrame(columns=["거래일", "KOSPI"]),
                 pd.DataFrame(columns=["거래일", "KOSDAQ"]))

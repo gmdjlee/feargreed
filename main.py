@@ -266,12 +266,31 @@ def get_market_indices(start, end):
 
         for market_type in ["KOSPI", "KOSDAQ"]:
             data = idx.get_market_index(start, end, market_type)
+
+            # 디버깅: 응답 데이터 확인
+            if data is None:
+                print(f"⚠️  {market_type}: API 응답이 None입니다.")
+                indices[market_type] = pd.DataFrame(columns=["거래일", market_type])
+                continue
+
+            print(f"📊 {market_type} API 응답 키: {list(data.keys())}")
+            if "output" in data:
+                print(f"   output 데이터 개수: {len(data['output'])}")
+                if data['output']:
+                    print(f"   첫 데이터 컬럼: {list(data['output'][0].keys())}")
+            if "block1" in data:
+                print(f"   block1 데이터 개수: {len(data['block1'])}")
+                if data['block1']:
+                    print(f"   첫 데이터 컬럼: {list(data['block1'][0].keys())}")
+
             df = idx.parse(data)
 
             if df is not None and not df.empty:
                 # 종가 컬럼만 선택하고 컬럼명 변경
                 indices[market_type] = df[["거래일", "종가"]].rename(columns={"종가": market_type})
+                print(f"✓ {market_type} 데이터 수집 성공: {len(df)} 행")
             else:
+                print(f"⚠️  {market_type}: 파싱 후 데이터가 비어있습니다.")
                 # 빈 데이터프레임 생성
                 indices[market_type] = pd.DataFrame(columns=["거래일", market_type])
 
@@ -279,6 +298,8 @@ def get_market_indices(start, end):
                indices.get("KOSDAQ", pd.DataFrame(columns=["거래일", "KOSDAQ"]))
     except Exception as e:
         print(f"⚠️  경고: KRX API를 통한 KOSPI/KOSDAQ 데이터 수집 실패: {e}")
+        import traceback
+        traceback.print_exc()
         print("    빈 데이터프레임으로 계속 진행합니다.")
         return (pd.DataFrame(columns=["거래일", "KOSPI"]),
                 pd.DataFrame(columns=["거래일", "KOSDAQ"]))

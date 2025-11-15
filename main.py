@@ -6,17 +6,13 @@ from functools import reduce
 import pandas as pd
 import requests
 from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
 
-# 한글 출력 문제 해결
+# 한글 출력 설정
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
-# matplotlib 한글 폰트 설정
-plt.rcParams['font.family'] = 'Malgun Gothic' if sys.platform == "win32" else 'AppleGothic'
-plt.rcParams['axes.unicode_minus'] = False
-
-# 헤더 설정
+# === 설정 ===
+# 헤더
 OPTION_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "*/*",
@@ -35,7 +31,7 @@ INDEX_HEADERS = {
     "Referer": "https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201010301",
 }
 
-# 페이로드 템플릿
+# 페이로드
 OPTION_PAYLOAD = {
     "inqTpCd": "2",
     "prtType": "QTY",
@@ -63,7 +59,6 @@ INDEX_MAP = {
     "KOSDAQ": {"type": "market", "indIdx": "2", "indIdx2": "001"},
 }
 
-# 지수 전체 이름
 INDEX_NAMES = {
     "5년국채": "5년 국채선물 추종 지수",
     "10년국채": "10년국채선물지수",
@@ -73,7 +68,8 @@ INDEX_NAMES = {
 }
 
 
-def to_date_str(val):
+# === 유틸리티 ===
+def to_date(val):
     """날짜를 YYYY-MM-DD 형식으로 변환"""
     if isinstance(val, str):
         if "/" in val:
@@ -88,104 +84,81 @@ def to_date_str(val):
 def fetch(session, url, headers, payload):
     """데이터 조회"""
     try:
-        response = session.post(url, headers=headers, data=payload, timeout=10)
-        response.raise_for_status()
-        return response.json() if response.text else None
+        res = session.post(url, headers=headers, data=payload, timeout=10)
+        res.raise_for_status()
+        return res.json() if res.text else None
     except (json.JSONDecodeError, requests.exceptions.RequestException):
         return None
 
 
-class BaseFetcher:
-    """데이터 조회 기본 클래스"""
+def to_num(x):
+    """문자열을 숫자로 변환 (쉼표 제거)"""
+    if isinstance(x, str) and x:
+        return float(x.replace(",", ""))
+    return x
 
+
+# === 데이터 수집 ===
+class BaseFetcher:
     def __init__(self, init_url, headers):
         self.url = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
         self.session = requests.Session()
         self.headers = headers
-        self._init_session(init_url)
-
-    def _init_session(self, init_url):
-        """세션 초기화"""
         try:
-            self.session.get(init_url, headers=self.headers, timeout=10)
+            self.session.get(init_url, headers=headers, timeout=10)
         except Exception:
             pass
 
 
 class OptionData(BaseFetcher):
-    """옵션 거래량 조회"""
-
     def __init__(self):
-        super().__init__(
-            "https://data.krx.co.kr/contents/MMC/ISIF/isif/MMCISIF013.cmd",
-            OPTION_HEADERS,
-        )
+        super().__init__("https://data.krx.co.kr/contents/MMC/ISIF/isif/MMCISIF013.cmd", OPTION_HEADERS)
 
-    def get(self, start_date, end_date, option_type="C"):
-        """옵션 데이터 조회 (C: Call, P: Put)"""
-        if option_type not in ["C", "P"]:
-            raise ValueError(f"Invalid option_type: {option_type}")
-
+    def get(self, start, end, opt_type="C"):
+        if opt_type not in ["C", "P"]:
+            raise ValueError(f"Invalid opt_type: {opt_type}")
         payload = OPTION_PAYLOAD.copy()
-        payload.update({"strtDd": start_date, "endDd": end_date, "isuOpt": option_type})
+        payload.update({"strtDd": start, "endDd": end, "isuOpt": opt_type})
         return fetch(self.session, self.url, self.headers, payload)
 
     def parse(self, data):
-        """데이터 파싱"""
         if not data:
             return None
-
         df = pd.DataFrame(data.get("block1") or data.get("output", []))
         if df.empty:
             return None
 
-        # 컬럼명 변경
-        df.rename(
-            columns={
-                "TRD_DD": "거래일",
-                "A07": "기관합계",
-                "A08": "기타법인",
-                "A09": "개인",
-                "A12": "외국인합계",
-                "AMT_OR_QTY": "전체",
-            },
-            inplace=True,
-        )
+        df.rename(columns={
+            "TRD_DD": "거래일",
+            "A07": "기관",
+            "A08": "법인",
+            "A09": "개인",
+            "A12": "외국인",
+            "AMT_OR_QTY": "전체",
+        }, inplace=True)
 
-        # 날짜 형식 변환
-        if "거래일" in df.columns:
-            df["거래일"] = df["거래일"].apply(to_date_str)
-
-        # 숫자 변환
-        for col in ["기관합계", "기타법인", "개인", "외국인합계", "전체"]:
+        df["거래일"] = df["거래일"].apply(to_date)
+        for col in ["기관", "법인", "개인", "외국인", "전체"]:
             if col in df.columns:
-                df[col] = df[col].apply(
-                    lambda x: int(str(x).replace(",", "")) if isinstance(x, str) else x
-                )
-
+                df[col] = df[col].apply(to_num).astype(int)
         return df
 
 
 class IndexData(BaseFetcher):
-    """지수 데이터 조회"""
-
     def __init__(self):
         super().__init__(
             "https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201010301",
             INDEX_HEADERS,
         )
 
-    def get(self, start_date, end_date, index_key):
-        """지수 데이터 조회"""
-        if index_key not in INDEX_MAP:
-            raise ValueError(f"Invalid index_key: {index_key}")
+    def get(self, start, end, key):
+        if key not in INDEX_MAP:
+            raise ValueError(f"Invalid key: {key}")
 
-        info = INDEX_MAP[index_key]
-        name = INDEX_NAMES[index_key]
+        info = INDEX_MAP[key]
+        name = INDEX_NAMES[key]
 
-        # KOSPI/KOSDAQ (시장지수)와 파생상품 지수를 구분하여 처리
         if info["type"] == "market":
-            # KOSPI/KOSDAQ용 payload
             payload = {
                 "bld": "dbms/MDC/STAT/standard/MDCSTAT00301",
                 "locale": "ko_KR",
@@ -194,397 +167,205 @@ class IndexData(BaseFetcher):
                 "indIdx2": info["indIdx2"],
                 "codeNmindIdx_finder_equidx0_4": name,
                 "param1indIdx_finder_equidx0_4": "",
-                "strtDd": start_date,
-                "endDd": end_date,
+                "strtDd": start,
+                "endDd": end,
                 "share": "2",
                 "money": "3",
                 "csvxls_isNo": "false",
             }
         else:
-            # 파생상품 지수용 payload (5년국채, 10년국채, VKOSPI)
             payload = INDEX_PAYLOAD.copy()
-            payload.update(
-                {
-                    "strtDd": start_date,
-                    "endDd": end_date,
-                    "indTpCd": info["indTpCd"],
-                    "idxIndCd": info["idxIndCd"],
-                    "idxCd": info["idxCd"],
-                    "idxCd2": info["idxCd2"],
-                    "tboxidxCd_finder_drvetcidx0_1": name,
-                    "codeNmidxCd_finder_drvetcidx0_1": name,
-                }
-            )
+            payload.update({
+                "strtDd": start,
+                "endDd": end,
+                "indTpCd": info["indTpCd"],
+                "idxIndCd": info["idxIndCd"],
+                "idxCd": info["idxCd"],
+                "idxCd2": info["idxCd2"],
+                "tboxidxCd_finder_drvetcidx0_1": name,
+                "codeNmidxCd_finder_drvetcidx0_1": name,
+            })
 
         return fetch(self.session, self.url, self.headers, payload)
 
     def parse(self, data):
-        """데이터 파싱"""
         if not data:
             return None
-
         df = pd.DataFrame(data.get("block1") or data.get("output", []))
         if df.empty:
             return None
 
-        # 컬럼명 변경
-        df.rename(
-            columns={
-                "TRD_DD": "거래일",
-                "CLSPRC_IDX": "종가",
-                "CMPPREVDD_IDX": "대비",
-                "FLUC_RT": "등락률",
-                "OPNPRC_IDX": "시가",
-                "HGPRC_IDX": "고가",
-                "LWPRC_IDX": "저가",
-            },
-            inplace=True,
-        )
+        df.rename(columns={
+            "TRD_DD": "거래일",
+            "CLSPRC_IDX": "종가",
+            "CMPPREVDD_IDX": "대비",
+            "FLUC_RT": "등락률",
+            "OPNPRC_IDX": "시가",
+            "HGPRC_IDX": "고가",
+            "LWPRC_IDX": "저가",
+        }, inplace=True)
 
-        # 날짜 형식 변환
-        if "거래일" in df.columns:
-            df["거래일"] = df["거래일"].apply(to_date_str)
-
-        # 숫자 컬럼 변환 (쉼표 제거)
-        numeric_cols = ["종가", "대비", "등락률", "시가", "고가", "저가"]
-        for col in numeric_cols:
+        df["거래일"] = df["거래일"].apply(to_date)
+        for col in ["종가", "대비", "등락률", "시가", "고가", "저가"]:
             if col in df.columns:
-                df[col] = df[col].apply(
-                    lambda x: float(str(x).replace(",", "")) if isinstance(x, str) and x else x
-                )
+                df[col] = df[col].apply(to_num)
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 컬럼 순서 정렬
-        cols = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
-        return df[[c for c in cols if c in df.columns]]
+        return df[["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]]
 
 
-def combine_data(start, end, debug=False):
-    """모든 데이터를 조합하여 JSON 생성"""
-    # 데이터 수집
+# === 데이터 조합 ===
+def combine(start, end):
+    """모든 데이터를 조합"""
     opt = OptionData()
     call = opt.parse(opt.get(start, end, "C"))
     put = opt.parse(opt.get(start, end, "P"))
 
     idx = IndexData()
-    bond5y = idx.parse(idx.get(start, end, "5년국채"))
-    bond10y = idx.parse(idx.get(start, end, "10년국채"))
-    vkospi = idx.parse(idx.get(start, end, "VKOSPI"))
+    b5y = idx.parse(idx.get(start, end, "5년국채"))
+    b10y = idx.parse(idx.get(start, end, "10년국채"))
+    vix = idx.parse(idx.get(start, end, "VKOSPI"))
+    kp = idx.parse(idx.get(start, end, "KOSPI"))
+    kq = idx.parse(idx.get(start, end, "KOSDAQ"))
 
-    # KOSPI 데이터 수집 (디버깅)
-    if debug:
-        print(f"\n{'='*80}\nKOSPI 데이터 수집 중...\n{'='*80}")
-    kospi_data = idx.get(start, end, "KOSPI")
-    if debug:
-        if kospi_data:
-            print(f"KOSPI API 응답 키: {list(kospi_data.keys())}")
-            if "output" in kospi_data:
-                print(f"output 데이터 개수: {len(kospi_data['output'])}")
-                if kospi_data['output']:
-                    print(f"첫 데이터 샘플: {kospi_data['output'][0]}")
-            if "block1" in kospi_data:
-                print(f"block1 데이터 개수: {len(kospi_data['block1'])}")
-                if kospi_data['block1']:
-                    print(f"첫 데이터 샘플: {kospi_data['block1'][0]}")
-        else:
-            print("⚠️  KOSPI API 응답이 None입니다.")
-    kospi = idx.parse(kospi_data)
-
-    # KOSDAQ 데이터 수집 (디버깅)
-    if debug:
-        print(f"\n{'='*80}\nKOSDAQ 데이터 수집 중...\n{'='*80}")
-    kosdaq_data = idx.get(start, end, "KOSDAQ")
-    if debug:
-        if kosdaq_data:
-            print(f"KOSDAQ API 응답 키: {list(kosdaq_data.keys())}")
-            if "output" in kosdaq_data:
-                print(f"output 데이터 개수: {len(kosdaq_data['output'])}")
-                if kosdaq_data['output']:
-                    print(f"첫 데이터 샘플: {kosdaq_data['output'][0]}")
-            if "block1" in kosdaq_data:
-                print(f"block1 데이터 개수: {len(kosdaq_data['block1'])}")
-                if kosdaq_data['block1']:
-                    print(f"첫 데이터 샘플: {kosdaq_data['block1'][0]}")
-        else:
-            print("⚠️  KOSDAQ API 응답이 None입니다.")
-    kosdaq = idx.parse(kosdaq_data)
-
-    # 유효성 검사 (KOSPI/KOSDAQ는 선택사항)
-    if any(df is None or df.empty for df in [call, put, bond5y, bond10y, vkospi]):
+    if any(df is None or df.empty for df in [call, put, b5y, b10y, vix]):
         return None
 
-    # 옵션 5일 이동평균 계산
-    for df, col in [(call, "Call Option"), (put, "Put Option")]:
+    # 옵션 5일 이동평균
+    for df, col in [(call, "Call"), (put, "Put")]:
         df.sort_values("거래일", inplace=True)
         df.reset_index(drop=True, inplace=True)
         df[col] = df["전체"].rolling(5).mean()
 
-    # 디버그 출력
-    if debug:
-        print(f"\n{'='*80}\nCall 옵션 5일 이동평균\n{'='*80}")
-        print(call[["거래일", "전체", "Call Option"]].to_string(index=False))
-
-    # 데이터 병합
+    # 병합
     dfs = [
-        bond5y[["거래일", "종가"]].rename(columns={"종가": "5년 국채선물 추종 지수"}),
-        bond10y[["거래일", "종가"]].rename(columns={"종가": "10년국채선물지수"}),
-        vkospi[["거래일", "종가"]].rename(columns={"종가": "코스피 200 변동성지수"}),
-        call[["거래일", "Call Option"]],
-        put[["거래일", "Put Option"]],
+        b5y[["거래일", "종가"]].rename(columns={"종가": "5년국채"}),
+        b10y[["거래일", "종가"]].rename(columns={"종가": "10년국채"}),
+        vix[["거래일", "종가"]].rename(columns={"종가": "VIX"}),
+        call[["거래일", "Call"]],
+        put[["거래일", "Put"]],
     ]
 
-    # KOSPI, KOSDAQ이 있으면 추가
-    if kospi is not None and not kospi.empty:
-        dfs.append(kospi[["거래일", "종가"]].rename(columns={"종가": "KOSPI"}))
-        if debug:
-            print(f"\n✓ KOSPI 데이터 추가: {len(kospi)} 행")
-            print(kospi.head().to_string(index=False))
-    else:
-        if debug:
-            print(f"\n⚠️  KOSPI 데이터 없음 (kospi is None: {kospi is None}, kospi.empty: {kospi.empty if kospi is not None else 'N/A'})")
+    if kp is not None and not kp.empty:
+        dfs.append(kp[["거래일", "종가"]].rename(columns={"종가": "KOSPI"}))
+    if kq is not None and not kq.empty:
+        dfs.append(kq[["거래일", "종가"]].rename(columns={"종가": "KOSDAQ"}))
 
-    if kosdaq is not None and not kosdaq.empty:
-        dfs.append(kosdaq[["거래일", "종가"]].rename(columns={"종가": "KOSDAQ"}))
-        if debug:
-            print(f"\n✓ KOSDAQ 데이터 추가: {len(kosdaq)} 행")
-            print(kosdaq.head().to_string(index=False))
-    else:
-        if debug:
-            print(f"\n⚠️  KOSDAQ 데이터 없음 (kosdaq is None: {kosdaq is None}, kosdaq.empty: {kosdaq.empty if kosdaq is not None else 'N/A'})")
-
-    result = reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs)
-
-    if debug:
-        print(f"\n{'='*80}\n병합된 데이터 컬럼\n{'='*80}")
-        print(f"컬럼: {list(result.columns)}")
-        print(f"데이터 행 수: {len(result)}")
-        if 'KOSPI' in result.columns:
-            print(f"KOSPI 데이터 개수: {result['KOSPI'].notna().sum()}")
-        if 'KOSDAQ' in result.columns:
-            print(f"KOSDAQ 데이터 개수: {result['KOSDAQ'].notna().sum()}")
-
-    return result.sort_values("거래일").reset_index(drop=True)
+    return reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs).sort_values("거래일").reset_index(drop=True)
 
 
-def save_csv(df, filename):
-    """CSV 파일 저장"""
-    if df is not None and not df.empty:
-        df.to_csv(filename, index=False, encoding="utf-8-sig")
-
-
+# === Fear & Greed 분석 ===
 def calc_rsi(df, col, window=10):
-    """RSI 계산"""
     delta = df[col].diff(1)
     gain = delta.where(delta > 0, 0).rolling(window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window).mean()
     rs = gain / loss
-    df['RSI_10'] = 100 - (100 / (1 + rs))
+    df['RSI'] = 100 - (100 / (1 + rs))
     return df
 
 
-def calc_fear_greed(df, idx_col, vix_col, call_col, put_col, bond5_col, bond10_col):
-    """Fear & Greed Index 계산"""
-    df['125_MA'] = df[idx_col].rolling(125).mean()
-    df['Momentum'] = (df[idx_col] - df['125_MA']) / df['125_MA'] * 100
-    df['Put_Call_Ratio'] = df[put_col] / df[call_col]
-    df['Market_Volatility'] = df[vix_col]
-    df['Bond_Yield_Diff'] = df[bond10_col] - df[bond5_col]
+def calc_fg(df, idx_col, vix_col, call_col, put_col, b5_col, b10_col):
+    df['MA125'] = df[idx_col].rolling(125).mean()
+    df['Mom'] = (df[idx_col] - df['MA125']) / df['MA125'] * 100
+    df['PCR'] = df[put_col] / df[call_col]
+    df['Vol'] = df[vix_col]
+    df['Spread'] = df[b10_col] - df[b5_col]
 
     scaler = MinMaxScaler()
-    df[['Momentum', 'Put_Call_Ratio', 'Market_Volatility', 'Bond_Yield_Diff', 'RSI_10']] = scaler.fit_transform(
-        df[['Momentum', 'Put_Call_Ratio', 'Market_Volatility', 'Bond_Yield_Diff', 'RSI_10']]
+    df[['Mom', 'PCR', 'Vol', 'Spread', 'RSI']] = scaler.fit_transform(
+        df[['Mom', 'PCR', 'Vol', 'Spread', 'RSI']]
     )
 
-    df['Fear_Greed_Index'] = (
-        df['Momentum'] * 0.2 +
-        (1 - df['Put_Call_Ratio']) * 0.2 +
-        (1 - df['Market_Volatility']) * 0.2 +
-        df['Bond_Yield_Diff'] * 0.2 +
-        df['RSI_10'] * 0.2
-    )
+    df['FG'] = (df['Mom'] * 0.2 + (1 - df['PCR']) * 0.2 +
+                (1 - df['Vol']) * 0.2 + df['Spread'] * 0.2 + df['RSI'] * 0.2)
     return df
 
 
 def calc_macd(df, col, short=12, long=26, signal=9):
-    """MACD 오실레이터 계산"""
-    df['Short_EMA'] = df[col].ewm(span=short, adjust=False).mean()
-    df['Long_EMA'] = df[col].ewm(span=long, adjust=False).mean()
-    df['MACD'] = df['Short_EMA'] - df['Long_EMA']
-    df['Signal_Line'] = df['MACD'].ewm(span=signal, adjust=False).mean()
-    df['Oscillator'] = df['MACD'] - df['Signal_Line']
+    df['EMA_S'] = df[col].ewm(span=short, adjust=False).mean()
+    df['EMA_L'] = df[col].ewm(span=long, adjust=False).mean()
+    df['MACD'] = df['EMA_S'] - df['EMA_L']
+    df['Signal'] = df['MACD'].ewm(span=signal, adjust=False).mean()
+    df['Osc'] = df['MACD'] - df['Signal']
     return df
 
 
-def plot_fear_greed(df, idx_col, title, filename):
-    """Fear & Greed 오실레이터와 지수 그래프"""
-    recent = df[df['거래일'] >= (df['거래일'].max() - pd.DateOffset(months=6))]
+def analyze(df):
+    """Fear & Greed 분석"""
+    df['거래일'] = pd.to_datetime(df['거래일'])
 
-    fig, ax1 = plt.subplots(figsize=(14, 7))
-    ax1.plot(recent['거래일'], recent['Oscillator'], label='Fear & Greed Oscillator', color='b')
-    ax1.set_xlabel('거래일')
-    ax1.set_ylabel('Fear & Greed Oscillator', color='b')
-    ax1.tick_params(axis='y', labelcolor='b')
-    ax1.grid(True)
-    ax1.legend(loc='upper left')
+    # 수치 변환
+    for col in ['5년국채', '10년국채', 'VIX', 'KOSPI', 'KOSDAQ', 'Call', 'Put']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    ax2 = ax1.twinx()
-    ax2.plot(recent['거래일'], recent[idx_col], label=f'{idx_col} Index', color='g')
-    ax2.set_ylabel(f'{idx_col} Index', color='g')
-    ax2.tick_params(axis='y', labelcolor='g')
-    ax2.legend(loc='upper right')
+    # NaN 제거 (필수 컬럼만)
+    req = ['5년국채', '10년국채', 'VIX', 'Call', 'Put']
+    df = df.dropna(subset=req).copy()
 
-    plt.title(title)
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
-    plt.close()
-
-
-def analyze_fear_greed(combined_df):
-    """Fear & Greed 분석 수행"""
-    print(f"\n📊 analyze_fear_greed 시작")
-    print(f"입력 데이터: {len(combined_df)} 행, 컬럼: {list(combined_df.columns)}")
-
-    # 각 컬럼의 non-NaN 데이터 개수 확인
-    print(f"\n각 컬럼의 데이터 개수:")
-    for col in combined_df.columns:
-        non_nan_count = combined_df[col].notna().sum()
-        print(f"  {col}: {non_nan_count}/{len(combined_df)}")
-
-    # 날짜를 datetime으로 변환
-    combined_df['거래일'] = pd.to_datetime(combined_df['거래일'])
-
-    # 수치형 변환
-    numeric_cols = ['5년 국채선물 추종 지수', '10년국채선물지수', '코스피 200 변동성지수',
-                    'KOSPI', 'KOSDAQ', 'Call Option', 'Put Option']
-    for col in numeric_cols:
-        if col in combined_df.columns:
-            combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce')
-
-    # 필수 컬럼 확인
-    required_cols = ['5년 국채선물 추종 지수', '10년국채선물지수', '코스피 200 변동성지수',
-                     'Call Option', 'Put Option']
-    missing_cols = [col for col in required_cols if col not in combined_df.columns]
-    if missing_cols:
-        print(f"❌ 오류: 필수 컬럼이 없습니다: {missing_cols}")
+    if len(df) == 0:
+        print("❌ 데이터 없음")
         return None, None
 
-    print(f"\n필수 컬럼의 데이터 개수 (dropna 전):")
-    for col in required_cols:
-        non_nan_count = combined_df[col].notna().sum()
-        print(f"  {col}: {non_nan_count}/{len(combined_df)}")
+    if len(df) < 125:
+        print(f"⚠️  데이터 {len(df)}일 (권장: 125일 이상)")
 
-    # 원본 데이터의 NaN만 제거 (KOSPI/KOSDAQ 제외)
-    print(f"\ndropna 전: {len(combined_df)} 행")
-    combined_df = combined_df.dropna(subset=required_cols).copy()
-    print(f"dropna 후: {len(combined_df)} 행")
+    kp_df, kq_df = None, None
 
-    # 데이터 충분성 확인
-    if len(combined_df) < 125:
-        print(f"⚠️  경고: 데이터가 {len(combined_df)}일로 부족합니다. 125일 이상의 데이터가 권장됩니다.")
-        print(f"    일부 지표가 정확하지 않을 수 있습니다.")
+    # KOSPI 분석
+    if 'KOSPI' in df.columns and df['KOSPI'].notna().any():
+        kp_df = df.copy()
+        kp_df = calc_rsi(kp_df, 'KOSPI')
+        kp_df = calc_fg(kp_df, 'KOSPI', 'VIX', 'Call', 'Put', '5년국채', '10년국채')
+        kp_df = calc_macd(kp_df, 'FG')
+        kp_df = kp_df.dropna().copy()
 
-    kospi_df, kosdaq_df = None, None
-
-    # KOSPI 분석 (데이터가 있는 경우에만)
-    if 'KOSPI' in combined_df.columns and combined_df['KOSPI'].notna().any():
-        kospi_df = combined_df.copy()
-        kospi_df = calc_rsi(kospi_df, 'KOSPI')
-        kospi_df = calc_fear_greed(kospi_df, 'KOSPI', '코스피 200 변동성지수', 'Call Option', 'Put Option',
-                                   '5년 국채선물 추종 지수', '10년국채선물지수')
-        kospi_df = calc_macd(kospi_df, 'Fear_Greed_Index')
-        # 계산 후 NaN 제거
-        kospi_df = kospi_df.dropna().copy()
-
-        if len(kospi_df) > 0:
-            # 그래프 생성
-            plot_fear_greed(kospi_df, 'KOSPI', 'Fear & Greed Oscillator and KOSPI Index (Recent 6 Months)',
-                           'fear_greed_kospi.png')
-            # 결과 저장
-            kospi_df.to_csv('fear_greed_kospi.csv', index=False, encoding='utf-8-sig')
+        if len(kp_df) > 0:
+            print(f"\n{'='*80}\nKOSPI Fear & Greed Index\n{'='*80}")
+            print(kp_df[['거래일', 'KOSPI', 'FG', 'Osc']].tail(20).to_string(index=False))
         else:
-            print("⚠️  KOSPI: 계산 후 유효한 데이터가 없습니다.")
-            kospi_df = None
-    else:
-        print("⚠️  KOSPI 데이터가 없어 분석을 건너뜁니다.")
+            kp_df = None
 
-    # KOSDAQ 분석 (데이터가 있는 경우에만)
-    if 'KOSDAQ' in combined_df.columns and combined_df['KOSDAQ'].notna().any():
-        kosdaq_df = combined_df.copy()
-        kosdaq_df = calc_rsi(kosdaq_df, 'KOSDAQ')
-        kosdaq_df = calc_fear_greed(kosdaq_df, 'KOSDAQ', '코스피 200 변동성지수', 'Call Option', 'Put Option',
-                                    '5년 국채선물 추종 지수', '10년국채선물지수')
-        kosdaq_df = calc_macd(kosdaq_df, 'Fear_Greed_Index')
-        # 계산 후 NaN 제거
-        kosdaq_df = kosdaq_df.dropna().copy()
+    # KOSDAQ 분석
+    if 'KOSDAQ' in df.columns and df['KOSDAQ'].notna().any():
+        kq_df = df.copy()
+        kq_df = calc_rsi(kq_df, 'KOSDAQ')
+        kq_df = calc_fg(kq_df, 'KOSDAQ', 'VIX', 'Call', 'Put', '5년국채', '10년국채')
+        kq_df = calc_macd(kq_df, 'FG')
+        kq_df = kq_df.dropna().copy()
 
-        if len(kosdaq_df) > 0:
-            # 그래프 생성
-            plot_fear_greed(kosdaq_df, 'KOSDAQ', 'Fear & Greed Oscillator and KOSDAQ Index (Recent 6 Months)',
-                           'fear_greed_kosdaq.png')
-            # 결과 저장
-            kosdaq_df.to_csv('fear_greed_kosdaq.csv', index=False, encoding='utf-8-sig')
+        if len(kq_df) > 0:
+            print(f"\n{'='*80}\nKOSDAQ Fear & Greed Index\n{'='*80}")
+            print(kq_df[['거래일', 'KOSDAQ', 'FG', 'Osc']].tail(20).to_string(index=False))
         else:
-            print("⚠️  KOSDAQ: 계산 후 유효한 데이터가 없습니다.")
-            kosdaq_df = None
-    else:
-        print("⚠️  KOSDAQ 데이터가 없어 분석을 건너뜁니다.")
+            kq_df = None
 
-    # 결과 확인
-    if kospi_df is None and kosdaq_df is None:
-        print("❌ 오류: KOSPI와 KOSDAQ 모두 분석할 수 없습니다. 데이터를 확인해주세요.")
+    if kp_df is None and kq_df is None:
+        print("❌ 분석 실패")
         return None, None
 
-    return kospi_df, kosdaq_df
+    return kp_df, kq_df
 
 
-def main(debug=False, analyze=True):
-    """메인 함수"""
-    start, end = "20251103", "20251108"
+# === 메인 ===
+def main():
+    start, end = "20250303", "20250310"
 
-    print(f"📊 데이터 수집 시작: {start} ~ {end}")
+    print(f"\n{'='*80}")
+    print(f"Fear & Greed Index 분석: {start} ~ {end}")
+    print(f"{'='*80}\n")
 
-    # 개별 데이터 저장
-    opt = OptionData()
-    for typ, name in [("C", "call"), ("P", "put")]:
-        df = opt.parse(opt.get(start, end, typ))
-        if df is not None and not df.empty:
-            save_csv(df, f"kospi200_{name}_option_{start}_{end}.csv")
-            print(f"✓ {name} 옵션 데이터 저장 완료 ({len(df)} rows)")
-        else:
-            print(f"⚠️  {name} 옵션 데이터 수집 실패")
+    # 데이터 수집
+    df = combine(start, end)
+    if df is None or df.empty:
+        print("❌ 데이터 수집 실패")
+        return
 
-    idx = IndexData()
-    for key, name in [("5년국채", "bond_5year"), ("10년국채", "bond_10year"), ("VKOSPI", "vkospi200"),
-                      ("KOSPI", "kospi"), ("KOSDAQ", "kosdaq")]:
-        df = idx.parse(idx.get(start, end, key))
-        if df is not None and not df.empty:
-            save_csv(df, f"{name}_index_{start}_{end}.csv")
-            print(f"✓ {key} 데이터 저장 완료 ({len(df)} rows)")
-        else:
-            print(f"⚠️  {key} 데이터 수집 실패")
+    print(f"✓ 조합 데이터: {len(df)} 행\n")
+    print(df.to_string(index=False))
 
-    # 조합 데이터 생성 및 저장
-    print("\n📈 조합 데이터 생성 중...")
-    combined = combine_data(start, end, debug)
-    if combined is not None and not combined.empty:
-        combined.to_json(f"combined_data_{start}_{end}.json", orient="records", force_ascii=False, indent=2)
-        combined.to_csv(f"combined_data_{start}_{end}.csv", index=False, encoding="utf-8-sig", sep="\t")
-        print(f"✓ 조합 데이터 저장 완료 ({len(combined)} rows)")
-        if debug:
-            print(f"\n{'='*80}\n최종 조합 데이터\n{'='*80}")
-            print(combined.to_string(index=False))
-
-        # Fear & Greed 분석 실행
-        if analyze:
-            print(f"\n{'='*80}\nFear & Greed 분석 시작\n{'='*80}")
-            kospi_fg, kosdaq_fg = analyze_fear_greed(combined)
-            if kospi_fg is not None:
-                print("✓ KOSPI Fear & Greed 분석 완료: fear_greed_kospi.csv, fear_greed_kospi.png")
-            if kosdaq_fg is not None:
-                print("✓ KOSDAQ Fear & Greed 분석 완료: fear_greed_kosdaq.csv, fear_greed_kosdaq.png")
-            if kospi_fg is None and kosdaq_fg is None:
-                print("⚠️  Fear & Greed 분석을 완료하지 못했습니다. 데이터 기간을 늘려주세요.")
-    else:
-        print("❌ 조합 데이터 생성 실패: 필수 데이터를 수집할 수 없습니다.")
+    # 분석
+    analyze(df)
 
 
 if __name__ == "__main__":

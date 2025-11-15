@@ -6,6 +6,7 @@ from functools import reduce
 import pandas as pd
 import requests
 from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
 
 # 한글 출력 설정
 if sys.platform == "win32":

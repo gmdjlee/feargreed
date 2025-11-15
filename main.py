@@ -211,7 +211,9 @@ class IndexData(BaseFetcher):
                 df[col] = df[col].apply(to_num)
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        return df[["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]]
+        # 존재하는 컬럼만 반환
+        cols = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
+        return df[[c for c in cols if c in df.columns]]
 
 
 # === 데이터 조합 ===

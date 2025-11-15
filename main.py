@@ -245,6 +245,15 @@ class IndexData(BaseFetcher):
         if "거래일" in df.columns:
             df["거래일"] = df["거래일"].apply(to_date_str)
 
+        # 숫자 컬럼 변환 (쉼표 제거)
+        numeric_cols = ["종가", "대비", "등락률", "시가", "고가", "저가"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(
+                    lambda x: float(str(x).replace(",", "")) if isinstance(x, str) and x else x
+                )
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
         # 컬럼 순서 정렬
         cols = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
         return df[[c for c in cols if c in df.columns]]

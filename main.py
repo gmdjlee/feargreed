@@ -88,9 +88,6 @@ def fetch(session, url, headers, payload):
         res = session.post(url, headers=headers, data=payload, timeout=10)
         res.raise_for_status()
         return res.json() if res.text else None
-<<<<<<< HEAD
-    except (json.JSONDecodeError, requests.exceptions.RequestException):
-=======
     except requests.exceptions.Timeout:
         print("⚠️  타임아웃: 서버 응답 시간 초과")
         return None
@@ -105,7 +102,6 @@ def fetch(session, url, headers, payload):
         return None
     except Exception as e:
         print(f"⚠️  예상치 못한 오류: {type(e).__name__}: {e}")
->>>>>>> 1b4a35672b0f2bee77340eea3b9b0df5eb7cb60c
         return None
 
 
@@ -140,28 +136,6 @@ class OptionData(BaseFetcher):
         return fetch(self.session, self.url, self.headers, payload)
 
     def parse(self, data):
-<<<<<<< HEAD
-        if not data:
-            return None
-        df = pd.DataFrame(data.get("block1") or data.get("output", []))
-        if df.empty:
-            return None
-
-        df.rename(columns={
-            "TRD_DD": "거래일",
-            "A07": "기관",
-            "A08": "법인",
-            "A09": "개인",
-            "A12": "외국인",
-            "AMT_OR_QTY": "전체",
-        }, inplace=True)
-
-        df["거래일"] = df["거래일"].apply(to_date)
-        for col in ["기관", "법인", "개인", "외국인", "전체"]:
-            if col in df.columns:
-                df[col] = df[col].apply(to_num).astype(int)
-        return df
-=======
         try:
             if not data:
                 return None
@@ -192,7 +166,6 @@ class OptionData(BaseFetcher):
         except Exception as e:
             print(f"⚠️  옵션 데이터 처리 오류: {type(e).__name__}: {e}")
             return None
->>>>>>> 1b4a35672b0f2bee77340eea3b9b0df5eb7cb60c
 
 
 class IndexData(BaseFetcher):
@@ -240,33 +213,6 @@ class IndexData(BaseFetcher):
         return fetch(self.session, self.url, self.headers, payload)
 
     def parse(self, data):
-<<<<<<< HEAD
-        if not data:
-            return None
-        df = pd.DataFrame(data.get("block1") or data.get("output", []))
-        if df.empty:
-            return None
-
-        df.rename(columns={
-            "TRD_DD": "거래일",
-            "CLSPRC_IDX": "종가",
-            "CMPPREVDD_IDX": "대비",
-            "FLUC_RT": "등락률",
-            "OPNPRC_IDX": "시가",
-            "HGPRC_IDX": "고가",
-            "LWPRC_IDX": "저가",
-        }, inplace=True)
-
-        df["거래일"] = df["거래일"].apply(to_date)
-        for col in ["종가", "대비", "등락률", "시가", "고가", "저가"]:
-            if col in df.columns:
-                df[col] = df[col].apply(to_num)
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 존재하는 컬럼만 반환
-        cols = ["거래일", "종가", "대비", "등락률", "시가", "고가", "저가"]
-        return df[[c for c in cols if c in df.columns]]
-=======
         try:
             if not data:
                 return None
@@ -302,85 +248,11 @@ class IndexData(BaseFetcher):
         except Exception as e:
             print(f"⚠️  지수 데이터 처리 오류: {type(e).__name__}: {e}")
             return None
->>>>>>> 1b4a35672b0f2bee77340eea3b9b0df5eb7cb60c
 
 
 # === 데이터 조합 ===
 def combine(start, end):
     """모든 데이터를 조합"""
-<<<<<<< HEAD
-    opt = OptionData()
-    call = opt.parse(opt.get(start, end, "C"))
-    put = opt.parse(opt.get(start, end, "P"))
-
-    idx = IndexData()
-    b5y = idx.parse(idx.get(start, end, "5년국채"))
-    b10y = idx.parse(idx.get(start, end, "10년국채"))
-    vix = idx.parse(idx.get(start, end, "VKOSPI"))
-    kp = idx.parse(idx.get(start, end, "KOSPI"))
-    kq = idx.parse(idx.get(start, end, "KOSDAQ"))
-
-    if any(df is None or df.empty for df in [call, put, b5y, b10y, vix]):
-        return None
-
-    # 옵션 5일 이동평균
-    for df, col in [(call, "Call"), (put, "Put")]:
-        df.sort_values("거래일", inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        df[col] = df["전체"].rolling(5).mean()
-
-    # 병합
-    dfs = [
-        b5y[["거래일", "종가"]].rename(columns={"종가": "5년국채"}),
-        b10y[["거래일", "종가"]].rename(columns={"종가": "10년국채"}),
-        vix[["거래일", "종가"]].rename(columns={"종가": "VIX"}),
-        call[["거래일", "Call"]],
-        put[["거래일", "Put"]],
-    ]
-
-    if kp is not None and not kp.empty:
-        dfs.append(kp[["거래일", "종가"]].rename(columns={"종가": "KOSPI"}))
-    if kq is not None and not kq.empty:
-        dfs.append(kq[["거래일", "종가"]].rename(columns={"종가": "KOSDAQ"}))
-
-    return reduce(lambda l, r: l.merge(r, on="거래일", how="outer"), dfs).sort_values("거래일").reset_index(drop=True)
-
-
-# === Fear & Greed 분석 ===
-def calc_rsi(df, col, window=10):
-    delta = df[col].diff(1)
-    gain = delta.where(delta > 0, 0).rolling(window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    return df
-
-
-def calc_fg(df, idx_col, vix_col, call_col, put_col, b5_col, b10_col):
-    df['MA125'] = df[idx_col].rolling(125).mean()
-    df['Mom'] = (df[idx_col] - df['MA125']) / df['MA125'] * 100
-    df['PCR'] = df[put_col] / df[call_col]
-    df['Vol'] = df[vix_col]
-    df['Spread'] = df[b10_col] - df[b5_col]
-
-    scaler = MinMaxScaler()
-    df[['Mom', 'PCR', 'Vol', 'Spread', 'RSI']] = scaler.fit_transform(
-        df[['Mom', 'PCR', 'Vol', 'Spread', 'RSI']]
-    )
-
-    df['FG'] = (df['Mom'] * 0.2 + (1 - df['PCR']) * 0.2 +
-                (1 - df['Vol']) * 0.2 + df['Spread'] * 0.2 + df['RSI'] * 0.2)
-    return df
-
-
-def calc_macd(df, col, short=12, long=26, signal=9):
-    df['EMA_S'] = df[col].ewm(span=short, adjust=False).mean()
-    df['EMA_L'] = df[col].ewm(span=long, adjust=False).mean()
-    df['MACD'] = df['EMA_S'] - df['EMA_L']
-    df['Signal'] = df['MACD'].ewm(span=signal, adjust=False).mean()
-    df['Osc'] = df['MACD'] - df['Signal']
-    return df
-=======
     try:
         opt = OptionData()
         call = opt.parse(opt.get(start, end, "C"))
@@ -481,87 +353,10 @@ def calc_macd(df, col, short=12, long=26, signal=9):
         print(f"⚠️  MACD 계산 오류: {type(e).__name__}: {e}")
         df['Osc'] = float('nan')
         return df
->>>>>>> 1b4a35672b0f2bee77340eea3b9b0df5eb7cb60c
 
 
 def analyze(df):
     """Fear & Greed 분석"""
-<<<<<<< HEAD
-    df['거래일'] = pd.to_datetime(df['거래일'])
-
-    # 수치 변환
-    for col in ['5년국채', '10년국채', 'VIX', 'KOSPI', 'KOSDAQ', 'Call', 'Put']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # NaN 제거 (필수 컬럼만)
-    req = ['5년국채', '10년국채', 'VIX', 'Call', 'Put']
-    df = df.dropna(subset=req).copy()
-
-    if len(df) == 0:
-        print("❌ 데이터 없음")
-        return None, None
-
-    if len(df) < 125:
-        print(f"⚠️  데이터 {len(df)}일 (권장: 125일 이상)")
-
-    kp_df, kq_df = None, None
-
-    # KOSPI 분석
-    if 'KOSPI' in df.columns and df['KOSPI'].notna().any():
-        kp_df = df.copy()
-        kp_df = calc_rsi(kp_df, 'KOSPI')
-        kp_df = calc_fg(kp_df, 'KOSPI', 'VIX', 'Call', 'Put', '5년국채', '10년국채')
-        kp_df = calc_macd(kp_df, 'FG')
-        kp_df = kp_df.dropna().copy()
-
-        if len(kp_df) > 0:
-            print(f"\n{'='*80}\nKOSPI Fear & Greed Index\n{'='*80}")
-            print(kp_df[['거래일', 'KOSPI', 'FG', 'Osc']].tail(20).to_string(index=False))
-        else:
-            kp_df = None
-
-    # KOSDAQ 분석
-    if 'KOSDAQ' in df.columns and df['KOSDAQ'].notna().any():
-        kq_df = df.copy()
-        kq_df = calc_rsi(kq_df, 'KOSDAQ')
-        kq_df = calc_fg(kq_df, 'KOSDAQ', 'VIX', 'Call', 'Put', '5년국채', '10년국채')
-        kq_df = calc_macd(kq_df, 'FG')
-        kq_df = kq_df.dropna().copy()
-
-        if len(kq_df) > 0:
-            print(f"\n{'='*80}\nKOSDAQ Fear & Greed Index\n{'='*80}")
-            print(kq_df[['거래일', 'KOSDAQ', 'FG', 'Osc']].tail(20).to_string(index=False))
-        else:
-            kq_df = None
-
-    if kp_df is None and kq_df is None:
-        print("❌ 분석 실패")
-        return None, None
-
-    return kp_df, kq_df
-
-
-# === 메인 ===
-def main():
-    start, end = "20250303", "20250310"
-
-    print(f"\n{'='*80}")
-    print(f"Fear & Greed Index 분석: {start} ~ {end}")
-    print(f"{'='*80}\n")
-
-    # 데이터 수집
-    df = combine(start, end)
-    if df is None or df.empty:
-        print("❌ 데이터 수집 실패")
-        return
-
-    print(f"✓ 조합 데이터: {len(df)} 행\n")
-    print(df.to_string(index=False))
-
-    # 분석
-    analyze(df)
-=======
     try:
         df['거래일'] = pd.to_datetime(df['거래일'])
 
@@ -662,7 +457,6 @@ def main():
         print(f"\n❌ 치명적 오류: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
->>>>>>> 1b4a35672b0f2bee77340eea3b9b0df5eb7cb60c
 
 
 if __name__ == "__main__":
